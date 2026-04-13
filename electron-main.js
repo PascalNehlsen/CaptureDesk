@@ -8,7 +8,7 @@ try {
 
 const { app, BrowserWindow, desktopCapturer, globalShortcut, ipcMain, screen, session, shell } = electronMain;
 const path = require("path");
-const { start } = require("./src/server/index.js");
+const { start, PORT } = require("./src/server/index.js");
 
 const LOOM_PARTITION = "persist:loom";
 let sessionConfigured = false;
@@ -174,7 +174,7 @@ function createWindow() {
   mainWindow.webContents.setWindowOpenHandler(createWindowOpenHandler());
   mainWindow.setContentProtection(true);
 
-  mainWindow.loadURL("http://localhost:8080");
+  mainWindow.loadURL(`http://localhost:${PORT}`);
   mainWindow.on("closed", () => {
     mainWindow = null;
     closeCameraWindow();

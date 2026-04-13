@@ -10,4 +10,11 @@ if [[ "${ELECTRON_NO_SANDBOX:-0}" == "1" ]]; then
   SANDBOX_ARGS+=(--no-sandbox)
 fi
 
-exec env -u ELECTRON_RUN_AS_NODE ./node_modules/electron/dist/electron . "${SANDBOX_ARGS[@]}" --ozone-platform=x11 --disable-gpu-sandbox --disable-software-rasterizer
+OZONE_ARGS=()
+if [[ -n "${CAPTUREDESK_OZONE_PLATFORM:-}" ]]; then
+  OZONE_ARGS+=(--ozone-platform="${CAPTUREDESK_OZONE_PLATFORM}")
+else
+  OZONE_ARGS+=(--ozone-platform=x11)
+fi
+
+exec env -u ELECTRON_RUN_AS_NODE ./node_modules/electron/dist/electron . "${SANDBOX_ARGS[@]}" "${OZONE_ARGS[@]}" --disable-gpu-sandbox --disable-software-rasterizer
