@@ -332,7 +332,9 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 900,
     height: 700,
+    frame: false,
     autoHideMenuBar: true,
+    icon: path.join(__dirname, "assets/capturedesk.svg"),
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
@@ -566,6 +568,18 @@ function toggleDrawOverlay() {
 }
 
 // ── IPC handlers ──────────────────────────────────────────────────────────────
+
+// Window controls (frameless title bar)
+ipcMain.on("window-minimize", () => {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.minimize();
+});
+ipcMain.on("window-maximize", () => {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.isMaximized() ? mainWindow.unmaximize() : mainWindow.maximize();
+});
+ipcMain.on("window-close", () => {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close();
+});
 
 ipcMain.on("recording-started", () => {
   if (!mainWindow || mainWindow.isDestroyed()) return;

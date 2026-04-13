@@ -1,6 +1,11 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("electronAPI", {
+  // Window controls (frameless title bar)
+  minimizeWindow: () => ipcRenderer.send("window-minimize"),
+  maximizeWindow: () => ipcRenderer.send("window-maximize"),
+  closeWindow: () => ipcRenderer.send("window-close"),
+
   // Recording lifecycle
   sendRecordingStarted: () => ipcRenderer.send("recording-started"),
   sendRecordingStopped: () => ipcRenderer.send("recording-stopped"),

@@ -3,70 +3,351 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta http-equiv="X-UA-Compatible" content="ie=edge" />
     <meta
       http-equiv="Content-Security-Policy"
       content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://cdn.loom.com; img-src 'self' data: blob: https://loom.com https://*.loom.com https://loomlocal.com https://*.loomlocal.com https://cdn.loom.com; connect-src 'self' https://loom.com https://*.loom.com https://loomlocal.com https://*.loomlocal.com https://cdn.loom.com; frame-src https://loom.com https://*.loom.com https://loomlocal.com https://*.loomlocal.com; media-src blob: data: https://loom.com https://*.loom.com https://cdn.loom.com; worker-src 'self' blob:; font-src 'self' data: https://cdn.loom.com;"
     />
-    <title>Loom Electron Recorder</title>
+    <title>CaptureDesk</title>
     <style>
-      body {
-        font-family: Arial, sans-serif;
-        margin: 0;
-        padding: 32px;
-        background: #0f172a;
-        color: #e2e8f0;
+      /* ── Reset & Custom Properties ──────────────────────────────── */
+      *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+      :root {
+        --bg-deep: #060a13;
+        --bg-surface: rgba(255,255,255,0.04);
+        --bg-surface-hover: rgba(255,255,255,0.08);
+        --bg-glass: rgba(15,23,42,0.6);
+        --accent: #6366f1;
+        --accent-glow: rgba(99,102,241,0.35);
+        --red: #ef4444;
+        --red-glow: rgba(239,68,68,0.3);
+        --green: #22c55e;
+        --text-primary: #f1f5f9;
+        --text-secondary: #94a3b8;
+        --text-muted: #64748b;
+        --border: rgba(255,255,255,0.08);
+        --titlebar-h: 38px;
       }
 
+      html, body {
+        height: 100%;
+        overflow: hidden;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+        color: var(--text-primary);
+        background: var(--bg-deep);
+      }
+
+      body { display: flex; flex-direction: column; }
+
+      /* ── Animated background ────────────────────────────────────── */
+      .bg-canvas {
+        position: fixed; inset: 0; z-index: 0; overflow: hidden;
+        background: linear-gradient(145deg, #060a13 0%, #0f172a 40%, #0c1222 100%);
+      }
+
+      .bg-orb {
+        position: absolute; border-radius: 50%;
+        filter: blur(90px); opacity: 0.3;
+        animation: orb-float 20s ease-in-out infinite;
+        will-change: transform;
+      }
+      .bg-orb:nth-child(1) {
+        width: 420px; height: 420px; background: #6366f1;
+        top: -120px; left: -100px;
+      }
+      .bg-orb:nth-child(2) {
+        width: 320px; height: 320px; background: #8b5cf6;
+        bottom: -60px; right: -80px;
+        animation-delay: -7s; animation-duration: 25s;
+      }
+      .bg-orb:nth-child(3) {
+        width: 220px; height: 220px; background: #ec4899;
+        top: 45%; left: 55%;
+        animation-delay: -13s; animation-duration: 30s;
+      }
+
+      @keyframes orb-float {
+        0%, 100% { transform: translate(0, 0) scale(1); }
+        25%      { transform: translate(30px, -40px) scale(1.05); }
+        50%      { transform: translate(-20px, 20px) scale(0.95); }
+        75%      { transform: translate(15px, 30px) scale(1.02); }
+      }
+
+      /* ── Custom title bar ───────────────────────────────────────── */
+      .titlebar {
+        position: relative; z-index: 10;
+        height: var(--titlebar-h);
+        display: flex; align-items: center; justify-content: space-between;
+        padding: 0 12px;
+        -webkit-app-region: drag;
+        user-select: none; flex-shrink: 0;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .titlebar-brand {
+        display: flex; align-items: center; gap: 8px;
+      }
+      .titlebar-icon { width: 18px; height: 18px; border-radius: 4px; }
+      .titlebar-title {
+        font-size: 12px; font-weight: 600;
+        color: var(--text-secondary); letter-spacing: 0.02em;
+      }
+
+      .titlebar-controls {
+        display: flex; gap: 2px;
+        -webkit-app-region: no-drag;
+      }
+      .titlebar-btn {
+        width: 36px; height: 28px; border: none; background: transparent;
+        color: var(--text-muted); cursor: pointer;
+        display: flex; align-items: center; justify-content: center;
+        border-radius: 6px; transition: background 0.15s, color 0.15s;
+      }
+      .titlebar-btn:hover { background: var(--bg-surface-hover); color: var(--text-primary); }
+      .titlebar-btn.close:hover { background: var(--red); color: white; }
+      .titlebar-btn svg { pointer-events: none; }
+
+      /* ── Main content ───────────────────────────────────────────── */
       main {
-        max-width: 720px;
+        position: relative; z-index: 1; flex: 1;
+        display: flex; flex-direction: column;
+        align-items: center; justify-content: center;
+        padding: 0 32px 24px; gap: 28px;
+        overflow-y: auto;
       }
 
-      button {
-        background: #2563eb;
-        border: 0;
-        border-radius: 8px;
-        color: white;
-        cursor: pointer;
-        font-size: 16px;
-        padding: 12px 20px;
+      /* ── Hero ────────────────────────────────────────────────────── */
+      .hero {
+        display: flex; flex-direction: column; align-items: center; gap: 10px;
       }
 
-      button:disabled {
-        cursor: progress;
-        opacity: 0.7;
+      .logo {
+        width: 72px; height: 72px; border-radius: 18px;
+        filter: drop-shadow(0 0 24px var(--accent-glow));
+        transition: filter 0.4s, transform 0.4s;
+      }
+      .logo:hover {
+        filter: drop-shadow(0 0 40px var(--accent-glow));
+        transform: scale(1.06);
+      }
+
+      .hero h1 {
+        font-size: 28px; font-weight: 700; letter-spacing: -0.02em;
+        background: linear-gradient(135deg, #f1f5f9 30%, #94a3b8);
+        -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+      }
+
+      .tagline {
+        font-size: 14px; color: var(--text-muted); font-weight: 400;
+      }
+
+      /* ── Record button ──────────────────────────────────────────── */
+      .record-section {
+        display: flex; flex-direction: column; align-items: center; gap: 20px;
+      }
+
+      .record-container {
+        position: relative; width: 100px; height: 100px; margin-top: 20px; margin-bottom: 32px;
+      }
+
+      .record-pulse {
+        position: absolute; inset: -10px; border-radius: 50%;
+        border: 2px solid var(--red); opacity: 0; pointer-events: none;
+      }
+      .record-container.ready .record-pulse {
+        animation: pulse-ring 2.5s ease-out infinite;
+      }
+      .record-container.ready .record-pulse:nth-child(2) {
+        animation-delay: 0.8s;
+      }
+
+      @keyframes pulse-ring {
+        0%   { transform: scale(0.9); opacity: 0.5; }
+        100% { transform: scale(1.6); opacity: 0; }
+      }
+
+      #record-button {
+        width: 100px; height: 100px; border-radius: 50%; border: none;
+        background: radial-gradient(circle at 40% 35%, #f87171, #ef4444 50%, #dc2626);
+        box-shadow: 0 0 30px var(--red-glow), inset 0 2px 4px rgba(255,255,255,0.2);
+        cursor: pointer; position: relative; z-index: 1;
+        transition: transform 0.25s cubic-bezier(0.34,1.56,0.64,1), box-shadow 0.3s, opacity 0.3s;
+        display: flex; align-items: center; justify-content: center;
+      }
+      #record-button:hover:not(:disabled) {
+        transform: scale(1.08);
+        box-shadow: 0 0 50px rgba(239,68,68,0.5), inset 0 2px 4px rgba(255,255,255,0.2);
+      }
+      #record-button:active:not(:disabled) { transform: scale(0.96); }
+      #record-button:disabled {
+        opacity: 0.35; cursor: not-allowed;
+        box-shadow: 0 0 10px rgba(239,68,68,0.1);
+      }
+
+      .record-icon {
+        width: 32px; height: 32px; fill: white;
+        filter: drop-shadow(0 1px 3px rgba(0,0,0,0.3));
+      }
+
+      /* ── Status badge ───────────────────────────────────────────── */
+      .status-badge {
+        display: inline-flex; align-items: center; gap: 8px;
+        padding: 8px 18px;
+        background: var(--bg-glass); border: 1px solid var(--border);
+        border-radius: 20px; backdrop-filter: blur(16px);
+        transition: border-color 0.3s;
+      }
+      .status-badge.ready { border-color: rgba(34,197,94,0.25); }
+      .status-badge.error { border-color: rgba(239,68,68,0.25); }
+
+      .status-dot {
+        width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+        background: var(--text-muted); transition: background 0.3s, box-shadow 0.3s;
+      }
+      .status-badge.loading .status-dot {
+        background: var(--accent); animation: blink 1.4s ease-in-out infinite;
+      }
+      .status-badge.ready .status-dot {
+        background: var(--green); box-shadow: 0 0 8px rgba(34,197,94,0.5);
+      }
+      .status-badge.error .status-dot {
+        background: var(--red); box-shadow: 0 0 8px rgba(239,68,68,0.5);
+      }
+
+      @keyframes blink {
+        0%, 100% { opacity: 1; }
+        50%      { opacity: 0.3; }
       }
 
       #status {
-        margin: 16px 0;
-        color: #93c5fd;
+        font-size: 13px; color: var(--text-secondary); white-space: nowrap;
       }
 
-      #status.error {
-        color: #fca5a5;
+      /* ── Keyboard shortcuts ─────────────────────────────────────── */
+      .shortcuts {
+        display: flex; gap: 16px; flex-wrap: wrap; justify-content: center; flex-direction: column;
       }
+      .shortcut {
+        display: flex; align-items: center; gap: 6px;
+        font-size: 12px; color: var(--text-muted);
+      }
+
+      kbd {
+        display: inline-block; padding: 2px 7px;
+        background: var(--bg-surface); border: 1px solid var(--border);
+        border-radius: 5px; font-family: inherit; font-size: 11px;
+        line-height: 1.5; color: var(--text-secondary);
+      }
+
+      /* ── Console ────────────────────────────────────────────────── */
+      .console-section {
+        width: 100%; max-width: 560px;
+      }
+
+      .console-toggle {
+        display: flex; align-items: center; gap: 6px;
+        background: none; border: none; color: var(--text-muted);
+        font-size: 12px; font-family: inherit; cursor: pointer;
+        padding: 6px 0; transition: color 0.15s;
+      }
+      .console-toggle:hover { color: var(--text-secondary); }
+
+      .console-chevron {
+        display: inline-block; font-size: 10px;
+        transition: transform 0.25s;
+      }
+      .console-chevron.open { transform: rotate(90deg); }
 
       #debug-log {
-        background: rgba(15, 23, 42, 0.6);
-        border: 1px solid rgba(148, 163, 184, 0.3);
-        border-radius: 8px;
-        max-height: 320px;
-        overflow: auto;
-        padding: 16px;
+        background: rgba(0,0,0,0.25);
+        border: 1px solid var(--border); border-radius: 8px;
+        max-height: 0; overflow: hidden; padding: 0 16px;
         white-space: pre-wrap;
+        font-family: 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+        font-size: 11px; color: var(--text-muted); line-height: 1.7;
+        transition: max-height 0.35s ease, padding 0.35s ease, border-color 0.35s;
       }
+      #debug-log.open {
+        max-height: 200px; padding: 12px 16px;
+        overflow-y: auto; border-color: rgba(255,255,255,0.12);
+      }
+
+      /* ── Scrollbar ──────────────────────────────────────────────── */
+      ::-webkit-scrollbar { width: 6px; }
+      ::-webkit-scrollbar-track { background: transparent; }
+      ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 3px; }
+      ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }
     </style>
   </head>
   <body>
-    <main>
-      <h1>Loom Electron Recorder</h1>
-      <p>Start a recording inside Electron.</p>
-      <div style="display: flex; gap: 12px; flex-wrap: wrap;">
-        <button id="record-button" disabled>Record</button>
+    <!-- Animated background -->
+    <div class="bg-canvas">
+      <div class="bg-orb"></div>
+      <div class="bg-orb"></div>
+      <div class="bg-orb"></div>
+    </div>
+
+    <!-- Custom title bar -->
+    <div class="titlebar">
+      <div class="titlebar-brand">
+        <img src="/assets/capturedesk.svg" class="titlebar-icon" alt="" />
+        <span class="titlebar-title">CaptureDesk</span>
       </div>
-      <p id="status">Loading Loom…</p>
-      <pre id="debug-log" aria-live="polite"></pre>
+      <div class="titlebar-controls">
+        <button class="titlebar-btn" id="btn-minimize" title="Minimize">
+          <svg width="12" height="12" viewBox="0 0 12 12"><line x1="2" y1="6" x2="10" y2="6" stroke="currentColor" stroke-width="1.2"/></svg>
+        </button>
+        <button class="titlebar-btn" id="btn-maximize" title="Maximize">
+          <svg width="12" height="12" viewBox="0 0 12 12"><rect x="2" y="2" width="8" height="8" rx="1.5" stroke="currentColor" stroke-width="1.2" fill="none"/></svg>
+        </button>
+        <button class="titlebar-btn close" id="btn-close" title="Close">
+          <svg width="12" height="12" viewBox="0 0 12 12"><line x1="2.5" y1="2.5" x2="9.5" y2="9.5" stroke="currentColor" stroke-width="1.2"/><line x1="9.5" y1="2.5" x2="2.5" y2="9.5" stroke="currentColor" stroke-width="1.2"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- Main content -->
+    <main>
+      <div class="hero">
+        <img src="/assets/capturedesk.svg" class="logo" alt="CaptureDesk" />
+        <h1>CaptureDesk</h1>
+        <p class="tagline">Loom Screen Recorder for Linux</p>
+      </div>
+
+      <div class="record-section">
+        <div class="record-container" id="record-container">
+          <div class="record-pulse"></div>
+          <div class="record-pulse"></div>
+          <button id="record-button" disabled>
+            <svg class="record-icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/></svg>
+          </button>
+        </div>
+        <div class="status-badge loading" id="status-badge">
+          <span class="status-dot"></span>
+          <span id="status">Loading Loom…</span>
+        </div>
+      </div>
+
+      <div class="shortcuts">
+        <div class="shortcut">
+          <span>Stop - </span>
+          <kbd>Ctrl</kbd><span>+</span><kbd>Shift</kbd><span>+</span><kbd>S</kbd>
+        </div>
+        <div class="shortcut">
+          <span>Draw - </span>
+          <kbd>Ctrl</kbd><span>+</span><kbd>Shift</kbd><span>+</span><kbd>D</kbd>
+        </div>
+      </div>
+
+      <div class="console-section">
+        <button class="console-toggle" id="console-toggle">
+          <span class="console-chevron" id="console-chevron">▸</span>
+          <span>Console</span>
+        </button>
+        <pre id="debug-log" aria-live="polite"></pre>
+      </div>
     </main>
+
     <script src="/assets/loom-sdk-browser.js"></script>
     <script src="/assets/renderer.js"></script>
   </body>
