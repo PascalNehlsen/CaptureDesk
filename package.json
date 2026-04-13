@@ -6,8 +6,8 @@
   "license": "MIT",
   "scripts": {
     "start": "nodemon -w src src/server/index.js",
-    "electron": "env -u ELECTRON_RUN_AS_NODE ./node_modules/electron/dist/electron . --no-sandbox --ozone-platform=x11 --disable-gpu-sandbox --disable-software-rasterizer",
-    "desktop:install": "bash ./scripts/install-desktop-entry.sh",
+    "electron": "env -u ELECTRON_RUN_AS_NODE ./node_modules/electron/dist/electron . --ozone-platform=x11 --disable-software-rasterizer",
+    "electron:no-sandbox": "env -u ELECTRON_RUN_AS_NODE ./node_modules/electron/dist/electron . --no-sandbox --ozone-platform=x11 --disable-gpu-sandbox --disable-software-rasterizer",    "desktop:install": "bash ./scripts/install-desktop-entry.sh",
     "pack": "electron-builder --dir",
     "dist": "electron-builder --linux AppImage"
   },

@@ -41,7 +41,7 @@ if (dotenvPath) {
   console.warn("No .env file found. Falling back to process environment.");
 }
 
-// Pull private key and app ID from env
+// Pull Loom app configuration from env
 const APP_ID = process.env.app_id;
 const LOOM_ENVIRONMENT = process.env.loom_environment || "production";
 const parsedPort = Number.parseInt(process.env.PORT, 10);
