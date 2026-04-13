@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      html, body {
+        overflow: hidden;
+        background: transparent;
+      }
+      .bar {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 16px;
+        background: rgba(15, 23, 42, 0.92);
+        border-radius: 30px;
+        -webkit-app-region: drag;
+        user-select: none;
+        width: max-content;
+      }
+
+      /* ── Recording indicators ───────────────────────────────────── */
+      .rec-dot {
+        width: 10px;
+        height: 10px;
+        background: #ef4444;
+        border-radius: 50%;
+        flex-shrink: 0;
+        animation: blink 1.4s ease-in-out infinite;
+      }
+      @keyframes blink {
+        0%, 100% { opacity: 1; }
+        50%       { opacity: 0.2; }
+      }
+      .timer {
+        color: #e2e8f0;
+        font-family: "SF Mono", "Menlo", "Consolas", monospace;
+        font-size: 14px;
+        min-width: 46px;
+      }
+
+      /* ── Shared button styles ───────────────────────────────────── */
+      .divider {
+        width: 1px;
+        height: 22px;
+        background: rgba(255, 255, 255, 0.15);
+        flex-shrink: 0;
+      }
+      .ctrl-btn {
+        -webkit-app-region: no-drag;
+        background: rgba(255, 255, 255, 0.1);
+        border: none;
+        color: #e2e8f0;
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        font-size: 15px;
+        cursor: pointer;
+        transition: background 0.15s;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+      }
+      .ctrl-btn:hover  { background: rgba(255, 255, 255, 0.2); }
+      .ctrl-btn:active { background: rgba(255, 255, 255, 0.3); }
+      .ctrl-btn.active { background: rgba(99, 102, 241, 0.65); color: #fff; }
+      .ctrl-btn svg    { width: 16px; height: 16px; fill: currentColor; }
+
+      .stop-btn {
+        -webkit-app-region: no-drag;
+        background: #ef4444;
+        border: none;
+        color: #fff;
+        padding: 6px 16px;
+        border-radius: 16px;
+        font-size: 12px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: background 0.15s;
+        flex-shrink: 0;
+      }
+      .stop-btn:hover  { background: #dc2626; }
+      .stop-btn:active { background: #b91c1c; }
+
+      /* ── Drawing tools (hidden until draw mode active) ──────────── */
+      .draw-tools {
+        display: none;
+        align-items: center;
+        gap: 6px;
+      }
+      .draw-tools.visible { display: flex; }
+
+      .color-swatch {
+        -webkit-app-region: no-drag;
+        width: 20px;
+        height: 20px;
+        border-radius: 50%;
+        border: 2px solid rgba(255, 255, 255, 0.25);
+        cursor: pointer;
+        flex-shrink: 0;
+        transition: border-color 0.15s, transform 0.1s;
+      }
+      .color-swatch:hover  { transform: scale(1.15); }
+      .color-swatch.active { border-color: #fff; }
+
+      .size-slider {
+        -webkit-app-region: no-drag;
+        width: 52px;
+        accent-color: #6366f1;
+        cursor: pointer;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="bar">
+      <!-- Recording status -->
+      <div class="rec-dot" id="rec-dot"></div>
+      <span class="timer" id="timer">00:00</span>
+
+      <div class="divider"></div>
+
+      <!-- Draw toggle -->
+      <button class="ctrl-btn" id="draw-btn" title="Zeichnen (Ctrl+Shift+D)">
+        <svg viewBox="0 0 24 24">
+          <circle cx="12" cy="12" r="6" stroke="currentColor" stroke-width="2" fill="none"/>
+          <line x1="12" y1="3" x2="12" y2="6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          <line x1="12" y1="18" x2="12" y2="21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          <line x1="3" y1="12" x2="6" y2="12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          <line x1="18" y1="12" x2="21" y2="12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+      </button>
+
+      <!-- ── Drawing tools (shown when draw mode is active) ── -->
+      <div class="draw-tools" id="draw-tools">
+        <div class="divider"></div>
+
+        <!-- Tool buttons -->
+        <button class="ctrl-btn active" data-tool="pen" title="Stift">
+          <svg viewBox="0 0 24 24"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
+        </button>
+        <button class="ctrl-btn" data-tool="highlighter" title="Textmarker">
+          <svg viewBox="0 0 24 24"><path d="M6 14l3 3v5h6v-5l3-3V9H6v5zm2-3h8v2.17l-3 3V20h-4v-3.83l-3-3V11zM11 2h2v3h-2zM3.5 5.88l1.41-1.41 2.12 2.12L5.62 8zM16.96 6.59l2.12-2.12 1.41 1.41-2.12 2.12z"/></svg>
+        </button>
+        <button class="ctrl-btn" data-tool="arrow" title="Pfeil">
+          <svg viewBox="0 0 24 24"><path d="M4 20L20 4m0 0h-8m8 0v8" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
+        </button>
+        <button class="ctrl-btn" data-tool="rect" title="Rechteck">
+          <svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2" stroke="currentColor" stroke-width="2" fill="none"/></svg>
+        </button>
+        <button class="ctrl-btn" data-tool="eraser" title="Radierer">
+          <svg viewBox="0 0 24 24"><path d="M16.24 3.56l4.95 4.94a1.5 1.5 0 0 1 0 2.12l-8.49 8.49a3 3 0 0 1-2.12.88H7.05a3 3 0 0 1-2.12-.88L2.81 16.99a1.5 1.5 0 0 1 0-2.12l11.31-11.31a1.5 1.5 0 0 1 2.12 0zM4.93 16.06L7.05 18.18a1 1 0 0 0 .71.29h3.53a1 1 0 0 0 .71-.29l3.18-3.18-4.95-4.95-5.3 5.3a.5.5 0 0 0 0 .71z"/></svg>
+        </button>
+
+        <div class="divider"></div>
+
+        <!-- Colors -->
+        <div class="color-swatch active" data-color="#ef4444" style="background:#ef4444" title="Rot"></div>
+        <div class="color-swatch" data-color="#f59e0b" style="background:#f59e0b" title="Gelb"></div>
+        <div class="color-swatch" data-color="#22c55e" style="background:#22c55e" title="Grün"></div>
+        <div class="color-swatch" data-color="#3b82f6" style="background:#3b82f6" title="Blau"></div>
+        <div class="color-swatch" data-color="#ffffff" style="background:#ffffff" title="Weiß"></div>
+
+        <div class="divider"></div>
+
+        <!-- Size + actions -->
+        <input type="range" class="size-slider" id="size-slider" min="2" max="20" value="4" title="Strichstärke"/>
+
+        <button class="ctrl-btn" id="undo-btn" title="Rückgängig">
+          <svg viewBox="0 0 24 24"><path d="M12.5 8c-2.65 0-5.05 1.04-6.83 2.73L3 8v9h9l-2.73-2.73A7.96 7.96 0 0 1 12.5 10c3.04 0 5.64 1.7 6.96 4.21l1.77-.77A10 10 0 0 0 12.5 8z"/></svg>
+        </button>
+        <button class="ctrl-btn" id="clear-btn" title="Alles löschen">
+          <svg viewBox="0 0 24 24"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
+        </button>
+      </div>
+
+      <div class="divider"></div>
+      <button class="stop-btn" id="stop-btn">Stop</button>
+    </div>
+
+    <script>
+      // ── Timer ──────────────────────────────────────────────────────
+      let elapsed = 0;
+      let timerInterval = null;
+      const timerEl    = document.getElementById("timer");
+      const drawBtn    = document.getElementById("draw-btn");
+      const drawTools  = document.getElementById("draw-tools");
+      const stopBtn    = document.getElementById("stop-btn");
+
+      function updateTimerDisplay() {
+        const min = String(Math.floor(elapsed / 60)).padStart(2, "0");
+        const sec = String(elapsed % 60).padStart(2, "0");
+        timerEl.textContent = min + ":" + sec;
+      }
+
+      function startTimer() {
+        if (timerInterval) return;
+        timerInterval = setInterval(() => { elapsed++; updateTimerDisplay(); }, 1000);
+      }
+
+      startTimer();
+
+      // ── Main control buttons ───────────────────────────────────────
+      stopBtn.addEventListener("click", () => {
+        if (window.electronAPI?.requestStopRecording) {
+          window.electronAPI.requestStopRecording();
+        }
+      });
+
+      drawBtn.addEventListener("click", () => {
+        if (window.electronAPI?.requestToggleDraw) {
+          window.electronAPI.requestToggleDraw();
+        }
+      });
+
+      // ── Drawing tools ──────────────────────────────────────────────
+      const toolBtns = document.querySelectorAll("[data-tool]");
+      toolBtns.forEach((btn) => {
+        btn.addEventListener("click", () => {
+          toolBtns.forEach((b) => b.classList.remove("active"));
+          btn.classList.add("active");
+          if (window.electronAPI?.sendDrawTool) {
+            window.electronAPI.sendDrawTool(btn.dataset.tool);
+          }
+        });
+      });
+
+      const swatches = document.querySelectorAll("[data-color]");
+      swatches.forEach((s) => {
+        s.addEventListener("click", () => {
+          swatches.forEach((sw) => sw.classList.remove("active"));
+          s.classList.add("active");
+          if (window.electronAPI?.sendDrawColor) {
+            window.electronAPI.sendDrawColor(s.dataset.color);
+          }
+        });
+      });
+
+      document.getElementById("size-slider").addEventListener("input", (e) => {
+        if (window.electronAPI?.sendDrawSize) {
+          window.electronAPI.sendDrawSize(parseInt(e.target.value, 10));
+        }
+      });
+
+      document.getElementById("undo-btn").addEventListener("click", () => {
+        if (window.electronAPI?.sendUndoDraw) window.electronAPI.sendUndoDraw();
+      });
+
+      document.getElementById("clear-btn").addEventListener("click", () => {
+        if (window.electronAPI?.sendClearDraw) window.electronAPI.sendClearDraw();
+      });
+
+      // ── IPC listeners ──────────────────────────────────────────────
+      if (window.electronAPI) {
+        if (typeof window.electronAPI.onDrawStateChanged === "function") {
+          window.electronAPI.onDrawStateChanged((active) => {
+            drawBtn.classList.toggle("active", active);
+            drawTools.classList.toggle("visible", active);
+            drawBtn.title = active
+              ? "Zeichnen beenden (Ctrl+Shift+D)"
+              : "Zeichnen (Ctrl+Shift+D)";
+          });
+        }
+      }
+    </script>
+  </body>
+</html>

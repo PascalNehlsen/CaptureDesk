@@ -1,0 +1,26 @@
+const { contextBridge, ipcRenderer } = require("electron");
+
+contextBridge.exposeInMainWorld("electronAPI", {
+  // Recording lifecycle
+  sendRecordingStarted: () => ipcRenderer.send("recording-started"),
+  sendRecordingStopped: () => ipcRenderer.send("recording-stopped"),
+  requestStopRecording: () => ipcRenderer.send("request-stop-recording"),
+  onStopRecording: (callback) => ipcRenderer.on("stop-recording", () => callback()),
+
+  // Drawing overlay — lifecycle
+  requestToggleDraw: () => ipcRenderer.send("request-toggle-draw"),
+  onDrawStateChanged: (callback) => ipcRenderer.on("draw-state-changed", (_, active) => callback(active)),
+  sendClearDraw: () => ipcRenderer.send("clear-draw"),
+  onClearDraw: (callback) => ipcRenderer.on("clear-draw", () => callback()),
+  sendUndoDraw: () => ipcRenderer.send("undo-draw"),
+  onUndoDraw: (callback) => ipcRenderer.on("undo-draw", () => callback()),
+
+  // Drawing overlay — tool settings (controls → overlay via main)
+  sendDrawTool: (tool) => ipcRenderer.send("draw-tool-changed", tool),
+  onDrawTool: (callback) => ipcRenderer.on("draw-tool-changed", (_, tool) => callback(tool)),
+  sendDrawColor: (color) => ipcRenderer.send("draw-color-changed", color),
+  onDrawColor: (callback) => ipcRenderer.on("draw-color-changed", (_, color) => callback(color)),
+  sendDrawSize: (size) => ipcRenderer.send("draw-size-changed", size),
+  onDrawSize: (callback) => ipcRenderer.on("draw-size-changed", (_, size) => callback(size)),
+  requestRaiseOverlayUi: () => ipcRenderer.send("raise-overlay-ui"),
+});

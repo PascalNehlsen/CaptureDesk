@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body {
+        width: 100vw;
+        height: 100vh;
+        overflow: hidden;
+        /* rgba(0,0,0,0.01) = 1% opacity: invisible to the eye but forces X11
+           to deliver mouse events to transparent windows (X11 only fires
+           pointer events on areas with actual painted pixels otherwise). */
+        background: rgba(0, 0, 0, 0.01);
+        cursor: crosshair;
+      }
+      canvas {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100vw;
+        height: 100vh;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="draw-canvas"></canvas>
+
+    <script>
+      const canvas = document.getElementById("draw-canvas");
+      const ctx = canvas.getContext("2d");
+
+      // High-DPI support
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width = window.innerWidth * dpr;
+      canvas.height = window.innerHeight * dpr;
+      ctx.scale(dpr, dpr);
+
+      // ── State ──────────────────────────────────────────────────────
+      let currentTool = "pen";
+      let currentColor = "#ef4444";
+      let lineWidth = 4;
+      let isDrawing = false;
+      let startX = 0;
+      let startY = 0;
+      let currentPath = [];
+      let snapshot = null;
+
+      // Store completed strokes for undo
+      const strokes = [];
+
+      // ── Helpers ────────────────────────────────────────────────────
+      function saveSnapshot() {
+        snapshot = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      }
+
+      function restoreSnapshot() {
+        if (snapshot) ctx.putImageData(snapshot, 0, 0);
+      }
+
+      function redrawAll() {
+        ctx.clearRect(0, 0, canvas.width / dpr, canvas.height / dpr);
+        strokes.forEach(drawStroke);
+      }
+
+      function drawStroke(stroke) {
+        ctx.save();
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+
+        if (stroke.tool === "eraser") {
+          ctx.globalCompositeOperation = "destination-out";
+          ctx.strokeStyle = "rgba(0,0,0,1)";
+          ctx.lineWidth = stroke.lineWidth * 3;
+        } else if (stroke.tool === "highlighter") {
+          ctx.globalCompositeOperation = "source-over";
+          ctx.globalAlpha = 0.35;
+          ctx.strokeStyle = stroke.color;
+          ctx.lineWidth = stroke.lineWidth * 4;
+        } else {
+          ctx.globalCompositeOperation = "source-over";
+          ctx.strokeStyle = stroke.color;
+          ctx.lineWidth = stroke.lineWidth;
+        }
+
+        if (stroke.tool === "pen" || stroke.tool === "highlighter" || stroke.tool === "eraser") {
+          if (stroke.points.length < 2) { ctx.restore(); return; }
+          ctx.beginPath();
+          ctx.moveTo(stroke.points[0].x, stroke.points[0].y);
+          for (let i = 1; i < stroke.points.length; i++) {
+            ctx.lineTo(stroke.points[i].x, stroke.points[i].y);
+          }
+          ctx.stroke();
+        } else if (stroke.tool === "arrow") {
+          drawArrowShape(ctx, stroke.x1, stroke.y1, stroke.x2, stroke.y2, stroke.lineWidth, stroke.color);
+        } else if (stroke.tool === "rect") {
+          ctx.strokeStyle = stroke.color;
+          ctx.lineWidth = stroke.lineWidth;
+          ctx.strokeRect(stroke.x1, stroke.y1, stroke.x2 - stroke.x1, stroke.y2 - stroke.y1);
+        }
+
+        ctx.restore();
+      }
+
+      function drawArrowShape(c, x1, y1, x2, y2, lw, color) {
+        const angle = Math.atan2(y2 - y1, x2 - x1);
+        const headLen = Math.max(14, lw * 4);
+        c.save();
+        c.strokeStyle = color;
+        c.lineWidth = lw;
+        c.lineCap = "round";
+        c.beginPath();
+        c.moveTo(x1, y1);
+        c.lineTo(x2, y2);
+        c.stroke();
+        c.beginPath();
+        c.moveTo(x2, y2);
+        c.lineTo(x2 - headLen * Math.cos(angle - Math.PI / 6), y2 - headLen * Math.sin(angle - Math.PI / 6));
+        c.moveTo(x2, y2);
+        c.lineTo(x2 - headLen * Math.cos(angle + Math.PI / 6), y2 - headLen * Math.sin(angle + Math.PI / 6));
+        c.stroke();
+        c.restore();
+      }
+
+      // ── Mouse events ───────────────────────────────────────────────
+      // Listen on window (not canvas) so events fire even when the canvas
+      // has no painted pixels yet — important for transparent windows on X11.
+      window.addEventListener("mousedown", (e) => {
+        isDrawing = true;
+        startX = e.clientX;
+        startY = e.clientY;
+        currentPath = [{ x: e.clientX, y: e.clientY }];
+
+        if (currentTool === "arrow" || currentTool === "rect") {
+          saveSnapshot();
+        }
+
+        if (currentTool === "pen" || currentTool === "highlighter" || currentTool === "eraser") {
+          ctx.save();
+          ctx.lineCap = "round";
+          ctx.lineJoin = "round";
+          if (currentTool === "eraser") {
+            ctx.globalCompositeOperation = "destination-out";
+            ctx.strokeStyle = "rgba(0,0,0,1)";
+            ctx.lineWidth = lineWidth * 3;
+          } else if (currentTool === "highlighter") {
+            ctx.globalAlpha = 0.35;
+            ctx.strokeStyle = currentColor;
+            ctx.lineWidth = lineWidth * 4;
+          } else {
+            ctx.strokeStyle = currentColor;
+            ctx.lineWidth = lineWidth;
+          }
+          ctx.beginPath();
+          ctx.moveTo(e.clientX, e.clientY);
+        }
+      });
+
+      window.addEventListener("mousemove", (e) => {
+        if (!isDrawing) return;
+
+        if (currentTool === "pen" || currentTool === "highlighter" || currentTool === "eraser") {
+          ctx.lineTo(e.clientX, e.clientY);
+          ctx.stroke();
+          currentPath.push({ x: e.clientX, y: e.clientY });
+        } else if (currentTool === "arrow") {
+          restoreSnapshot();
+          drawArrowShape(ctx, startX, startY, e.clientX, e.clientY, lineWidth, currentColor);
+        } else if (currentTool === "rect") {
+          restoreSnapshot();
+          ctx.save();
+          ctx.strokeStyle = currentColor;
+          ctx.lineWidth = lineWidth;
+          ctx.strokeRect(startX, startY, e.clientX - startX, e.clientY - startY);
+          ctx.restore();
+        }
+      });
+
+      function finishStroke(e) {
+        if (!isDrawing) return;
+        isDrawing = false;
+
+        if (currentTool === "pen" || currentTool === "highlighter" || currentTool === "eraser") {
+          ctx.restore();
+          strokes.push({ tool: currentTool, color: currentColor, lineWidth, points: currentPath });
+        } else if (currentTool === "arrow") {
+          strokes.push({ tool: "arrow", color: currentColor, lineWidth, x1: startX, y1: startY, x2: e.clientX, y2: e.clientY });
+        } else if (currentTool === "rect") {
+          strokes.push({ tool: "rect", color: currentColor, lineWidth, x1: startX, y1: startY, x2: e.clientX, y2: e.clientY });
+        }
+
+        currentPath = [];
+        snapshot = null;
+
+        if (window.electronAPI?.requestRaiseOverlayUi) {
+          window.electronAPI.requestRaiseOverlayUi();
+        }
+      }
+
+      window.addEventListener("mouseup", finishStroke);
+      // mouseleave on window = mouse left the entire screen overlay → finish stroke
+      window.addEventListener("mouseleave", finishStroke);
+
+      // ── IPC from controls window (via main process) ────────────────
+      if (window.electronAPI) {
+        if (typeof window.electronAPI.onClearDraw === "function") {
+          window.electronAPI.onClearDraw(() => {
+            strokes.length = 0;
+            ctx.clearRect(0, 0, canvas.width / dpr, canvas.height / dpr);
+          });
+        }
+        if (typeof window.electronAPI.onUndoDraw === "function") {
+          window.electronAPI.onUndoDraw(() => {
+            strokes.pop();
+            redrawAll();
+          });
+        }
+        if (typeof window.electronAPI.onDrawTool === "function") {
+          window.electronAPI.onDrawTool((tool) => { currentTool = tool; });
+        }
+        if (typeof window.electronAPI.onDrawColor === "function") {
+          window.electronAPI.onDrawColor((color) => { currentColor = color; });
+        }
+        if (typeof window.electronAPI.onDrawSize === "function") {
+          window.electronAPI.onDrawSize((size) => { lineWidth = size; });
+        }
+      }
+
+      // Keyboard Undo (Ctrl+Z) — forwarded events include keyboard too
+      window.addEventListener("keydown", (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key === "z") {
+          e.preventDefault();
+          strokes.pop();
+          redrawAll();
+        }
+      });
+    </script>
+  </body>
+</html>

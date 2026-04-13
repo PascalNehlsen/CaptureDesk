@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+      }
+      html,
+      body {
+        width: 200px;
+        height: 200px;
+        overflow: hidden;
+        background: transparent;
+        -webkit-app-region: drag;
+        cursor: move;
+      }
+      video {
+        width: 200px;
+        height: 200px;
+        object-fit: cover;
+        border-radius: 50%;
+        transform: scaleX(-1);
+        pointer-events: none;
+      }
+    </style>
+  </head>
+  <body>
+    <video id="cam" autoplay muted playsinline></video>
+    <script>
+      navigator.mediaDevices
+        .getUserMedia({ video: true, audio: false })
+        .then((stream) => {
+          document.getElementById("cam").srcObject = stream;
+        })
+        .catch((err) => {
+          console.error("Camera error:", err);
+        });
+    </script>
+  </body>
+</html>

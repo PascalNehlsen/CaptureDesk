@@ -1,0 +1,49 @@
+{
+  "name": "loom-sdk-backend-auth",
+  "version": "1.0.0",
+  "description": "CaptureDesk desktop recorder built with Electron",
+  "main": "electron-main.js",
+  "license": "MIT",
+  "scripts": {
+    "start": "nodemon -w src src/server/index.js",
+    "electron": "env -u ELECTRON_RUN_AS_NODE ./node_modules/electron/dist/electron . --no-sandbox --ozone-platform=x11 --disable-gpu-sandbox --disable-software-rasterizer",
+    "desktop:install": "bash ./scripts/install-desktop-entry.sh",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder --linux AppImage"
+  },
+  "dependencies": {
+    "@loomhq/loom-embed": "^1.7.0",
+    "@loomhq/record-sdk": "^4.10.4",
+    "dotenv": "^17.4.2",
+    "ejs": "3.1.6",
+    "express": "4.17.2",
+    "jose": "4.3.7"
+  },
+  "devDependencies": {
+    "electron": "^41.2.0",
+    "electron-builder": "^26.8.1",
+    "esbuild": "^0.28.0",
+    "nodemon": "1.18.4"
+  },
+  "keywords": [],
+  "build": {
+    "appId": "com.capturedesk.app",
+    "productName": "CaptureDesk",
+    "asar": true,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "electron-main.js",
+      "preload.js",
+      "src/**/*",
+      "package.json"
+    ],
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Utility"
+    }
+  }
+}

@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="X-UA-Compatible" content="ie=edge" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://cdn.loom.com; img-src 'self' data: blob: https://loom.com https://*.loom.com https://loomlocal.com https://*.loomlocal.com https://cdn.loom.com; connect-src 'self' https://loom.com https://*.loom.com https://loomlocal.com https://*.loomlocal.com https://cdn.loom.com; frame-src https://loom.com https://*.loom.com https://loomlocal.com https://*.loomlocal.com; media-src blob: data: https://loom.com https://*.loom.com https://cdn.loom.com; worker-src 'self' blob:; font-src 'self' data: https://cdn.loom.com;"
+    />
+    <title>Loom Electron Recorder</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        margin: 0;
+        padding: 32px;
+        background: #0f172a;
+        color: #e2e8f0;
+      }
+
+      main {
+        max-width: 720px;
+      }
+
+      button {
+        background: #2563eb;
+        border: 0;
+        border-radius: 8px;
+        color: white;
+        cursor: pointer;
+        font-size: 16px;
+        padding: 12px 20px;
+      }
+
+      button:disabled {
+        cursor: progress;
+        opacity: 0.7;
+      }
+
+      #status {
+        margin: 16px 0;
+        color: #93c5fd;
+      }
+
+      #status.error {
+        color: #fca5a5;
+      }
+
+      #debug-log {
+        background: rgba(15, 23, 42, 0.6);
+        border: 1px solid rgba(148, 163, 184, 0.3);
+        border-radius: 8px;
+        max-height: 320px;
+        overflow: auto;
+        padding: 16px;
+        white-space: pre-wrap;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Loom Electron Recorder</h1>
+      <p>Start a recording or sign in with Google inside Electron.</p>
+      <div style="display: flex; gap: 12px; flex-wrap: wrap;">
+        <button id="record-button" disabled>Record</button>
+        <button id="google-login-button" disabled>Login mit Google</button>
+      </div>
+      <p id="status">Loading Loom…</p>
+      <pre id="debug-log" aria-live="polite"></pre>
+    </main>
+  </body>
+  <script src="/assets/loom-sdk-browser.js"></script>
+  <script src="/assets/renderer.js"></script>
+</html>
