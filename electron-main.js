@@ -43,11 +43,12 @@ function relaxFrameAncestorsDirective(values) {
       .split(";")
       .map((directive) => directive.trim())
       .filter(Boolean)
-      .map((directive) =>
-        directive.toLowerCase().startsWith("frame-ancestors")
+      .map((directive) => {
+        const [directiveName] = directive.split(/\s+/, 1);
+        return directiveName.toLowerCase() === "frame-ancestors"
           ? "frame-ancestors *"
-          : directive,
-      )
+          : directive;
+      })
       .join("; "),
   );
 }
