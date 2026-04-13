@@ -36,6 +36,22 @@ function isLoomUrl(rawUrl) {
   }
 }
 
+function relaxFrameAncestorsDirective(values) {
+  const cspValues = Array.isArray(values) ? values : [String(values)];
+  return cspValues.map((value) =>
+    value
+      .split(";")
+      .map((directive) => directive.trim())
+      .filter(Boolean)
+      .map((directive) =>
+        directive.toLowerCase().startsWith("frame-ancestors")
+          ? "frame-ancestors *"
+          : directive,
+      )
+      .join("; "),
+  );
+}
+
 function createPopupWindowOptions() {
   return {
     width: 520,
@@ -126,8 +142,12 @@ function configureLoomSession(browserSession) {
     const headers = { ...details.responseHeaders };
     delete headers["x-frame-options"];
     delete headers["X-Frame-Options"];
-    delete headers["content-security-policy"];
-    delete headers["Content-Security-Policy"];
+    if (headers["content-security-policy"]) {
+      headers["content-security-policy"] = relaxFrameAncestorsDirective(headers["content-security-policy"]);
+    }
+    if (headers["Content-Security-Policy"]) {
+      headers["Content-Security-Policy"] = relaxFrameAncestorsDirective(headers["Content-Security-Policy"]);
+    }
     callback({ responseHeaders: headers });
   });
 }
