@@ -19,19 +19,26 @@ Electron desktop app for screen recording with the Loom Record SDK, a custom dra
 ### Setup
 
 1. Install dependencies:
+
    ```bash
    npm install
    ```
+
 2. Create your local env file:
+
    ```bash
    cp example.env .env
    ```
+
 3. Fill in your Loom credentials in `.env`:
+
    ```env
    private_key="YOUR_PEM_FROM_YOUR_LOOM_APP"
    app_id="YOUR_APP_ID"
    ```
+
 4. Start the app in development mode:
+
    ```bash
    npm run electron
    ```

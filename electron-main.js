@@ -93,11 +93,11 @@ function configureLoomSession(browserSession) {
         try {
           const sources = await desktopCapturer.getSources({
             thumbnailSize: { width: 0, height: 0 },
-            types: ["screen", "window"],
+            types: ["screen"],
           });
-          const preferredSource = sources.find((source) => source.id.startsWith("screen:")) || sources[0];
+          const selectedSource = sources[0];
 
-          if (!preferredSource) {
+          if (!selectedSource) {
             console.error("No display source available for Loom recording.");
             callback({});
             return;
@@ -105,7 +105,7 @@ function configureLoomSession(browserSession) {
 
           callback({
             audio: false,
-            video: preferredSource,
+            video: selectedSource,
           });
         } catch (error) {
           console.error("Failed to provide a display source for Loom recording:", error);
