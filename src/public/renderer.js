@@ -26,7 +26,13 @@ window.global = window;
   function isLoomOrigin(origin) {
     try {
       const { hostname } = new URL(origin);
-      return hostname === "loom.com" || hostname === "www.loom.com" || hostname.endsWith(".loom.com") || hostname === "loomlocal.com";
+      return (
+        hostname === "loom.com" ||
+        hostname === "www.loom.com" ||
+        hostname.endsWith(".loom.com") ||
+        hostname === "loomlocal.com" ||
+        hostname.endsWith(".loomlocal.com")
+      );
     } catch {
       return false;
     }
