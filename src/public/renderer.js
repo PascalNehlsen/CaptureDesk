@@ -2,7 +2,6 @@ window.global = window;
 
 (function bootstrapLoom() {
   const recordButton = document.querySelector("#record-button");
-  const googleLoginButton = document.querySelector("#google-login-button");
   const statusElement = document.querySelector("#status");
   const debugLogElement = document.querySelector("#debug-log");
 
@@ -143,11 +142,6 @@ window.global = window;
     }
 
     recordButton.disabled = false;
-    googleLoginButton.disabled = false;
-    googleLoginButton.addEventListener("click", () => {
-      setStatus("Opening Google login…");
-      sdkButton.openPreRecordPanel();
-    });
 
     setStatus("Ready to record.");
   }
@@ -159,10 +153,6 @@ window.global = window;
 
     const payload = typeof event.data === "string" ? event.data : JSON.stringify(event.data).slice(0, 600);
     appendLog(`[loom postMessage from ${event.origin}]`, payload);
-
-    if (event.data && event.data.type === "consumer_trigger/oauth_login_user") {
-      setStatus("Google sign-in opened. Finish the flow in the popup window.");
-    }
   });
 
   window.addEventListener("error", (event) => {
@@ -175,7 +165,6 @@ window.global = window;
 
   initializeLoom().catch((error) => {
     recordButton.disabled = true;
-    googleLoginButton.disabled = true;
     setStatus(error.message, true);
     appendLog("Initialization failed", error.stack || error.message);
   });

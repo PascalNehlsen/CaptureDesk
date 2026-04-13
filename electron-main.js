@@ -83,6 +83,172 @@ function createWindowOpenHandler() {
   };
 }
 
+function normalizeDisplayId(value) {
+  if (value === undefined || value === null || value === "") {
+    return null;
+  }
+  return String(value);
+}
+
+// ---------------------------------------------------------------------------
+// Native-resolution upscale for display capture
+// ---------------------------------------------------------------------------
+// Electron's desktopCapturer often downscales the display capture (e.g.
+// 1920×1200 → 1728×1080) while preserving the aspect ratio. Loom's player
+// then shows pillarbox bars because the video is narrower than expected.
+// The Chrome Extension captures at native resolution and Loom handles it
+// fine — no bars, no crop needed.
+//
+// Fix: intercept getDisplayMedia and upscale every frame back to the native
+// display resolution via Insertable Streams + OffscreenCanvas. No content
+// is cropped or distorted — we simply undo Electron's downscale.
+//
+// Injection: CDP Page.addScriptToEvaluateOnNewDocument runs the script BEFORE
+// any page scripts in every frame (including cross-origin Loom SDK iframes),
+// preventing the SDK from caching the original getDisplayMedia reference.
+// ---------------------------------------------------------------------------
+
+let _captureOverrideScript;
+
+function getCaptureOverrideScript() {
+  if (_captureOverrideScript !== undefined) return _captureOverrideScript;
+
+  const { width: nativeW, height: nativeH } = screen.getPrimaryDisplay().size;
+
+  console.log(`[CaptureDesk] Display is ${nativeW}x${nativeH} — will upscale capture to native resolution`);
+
+  // ES5-compatible: runs in sandboxed cross-origin iframes
+  _captureOverrideScript = `(function() {
+    if (window.__capturedeskApplied) return;
+    window.__capturedeskApplied = true;
+    if (!navigator.mediaDevices || typeof navigator.mediaDevices.getDisplayMedia !== 'function') return;
+
+    var NATIVE_W = ${nativeW};
+    var NATIVE_H = ${nativeH};
+
+    console.warn('[CaptureDesk] Override installed in: ' + location.href.substring(0, 120));
+
+    var _origGDM = navigator.mediaDevices.getDisplayMedia.bind(navigator.mediaDevices);
+
+    navigator.mediaDevices.getDisplayMedia = function() {
+      console.warn('[CaptureDesk] getDisplayMedia intercepted');
+
+      return _origGDM.apply(navigator.mediaDevices, arguments).then(function(stream) {
+        var track = (stream.getVideoTracks() || [])[0];
+        if (!track) return stream;
+
+        if (typeof MediaStreamTrackProcessor === 'undefined' ||
+            typeof MediaStreamTrackGenerator === 'undefined') {
+          console.warn('[CaptureDesk] Insertable Streams unavailable');
+          return stream;
+        }
+
+        return buildUpscaledStream(stream, track);
+      });
+    };
+
+    function buildUpscaledStream(originalStream, srcTrack) {
+      var canvas = new OffscreenCanvas(NATIVE_W, NATIVE_H);
+      var ctx    = canvas.getContext('2d');
+      var logged = false;
+
+      var processor = new MediaStreamTrackProcessor({ track: srcTrack });
+      var generator = new MediaStreamTrackGenerator({ kind: 'video' });
+
+      var transform = new TransformStream({
+        transform: function(frame, ctrl) {
+          try {
+            var fW = frame.displayWidth  || frame.codedWidth;
+            var fH = frame.displayHeight || frame.codedHeight;
+
+            if (fW === NATIVE_W && fH === NATIVE_H) {
+              ctrl.enqueue(frame);
+              return;
+            }
+
+            ctx.drawImage(frame, 0, 0, fW, fH, 0, 0, NATIVE_W, NATIVE_H);
+
+            var init = { timestamp: frame.timestamp };
+            if (frame.duration != null) init.duration = frame.duration;
+            var out = new VideoFrame(canvas, init);
+            frame.close();
+
+            if (!logged) {
+              console.warn('[CaptureDesk] Frame 0: ' + fW + 'x' + fH +
+                ' -> ' + out.codedWidth + 'x' + out.codedHeight);
+              logged = true;
+            }
+
+            ctrl.enqueue(out);
+          } catch (e) {
+            console.warn('[CaptureDesk] Frame error: ' + e.message);
+            ctrl.enqueue(frame);
+          }
+        }
+      });
+
+      processor.readable.pipeThrough(transform).pipeTo(generator.writable).catch(function(err) {
+        if (err.message !== 'Stream closed') {
+          console.warn('[CaptureDesk] Pipeline error: ' + err.message);
+        }
+      });
+
+      patchTrackSettings(generator);
+
+      var tracks = [generator];
+      var audio  = originalStream.getAudioTracks();
+      for (var i = 0; i < audio.length; i++) tracks.push(audio[i]);
+
+      console.warn('[CaptureDesk] Pipeline active -> ' + NATIVE_W + 'x' + NATIVE_H);
+      return new MediaStream(tracks);
+    }
+
+    function patchTrackSettings(track) {
+      var _orig = track.getSettings.bind(track);
+      track.getSettings = function() {
+        var s = _orig();
+        s.width  = NATIVE_W;
+        s.height = NATIVE_H;
+        return s;
+      };
+    }
+  })();`;
+
+  return _captureOverrideScript;
+}
+
+function pickScreenSourceForRecording(sources) {
+  if (!Array.isArray(sources) || sources.length === 0) {
+    return null;
+  }
+
+  const primaryDisplayId = normalizeDisplayId(screen.getPrimaryDisplay()?.id);
+  if (primaryDisplayId) {
+    const primaryMatch = sources.find((source) => normalizeDisplayId(source.display_id) === primaryDisplayId);
+    if (primaryMatch) {
+      return primaryMatch;
+    }
+  }
+
+  const availableDisplayIds = new Set(
+    screen
+      .getAllDisplays()
+      .map((display) => normalizeDisplayId(display.id))
+      .filter(Boolean),
+  );
+
+  const matchedDisplaySource = sources.find((source) => {
+    const sourceDisplayId = normalizeDisplayId(source.display_id);
+    return sourceDisplayId && availableDisplayIds.has(sourceDisplayId);
+  });
+  if (matchedDisplaySource) {
+    return matchedDisplaySource;
+  }
+
+  const numberedScreenSource = sources.find((source) => /^screen\s+\d+$/i.test(source.name));
+  return numberedScreenSource || sources[0];
+}
+
 function configureLoomSession(browserSession) {
   if (sessionConfigured) {
     return;
@@ -112,13 +278,19 @@ function configureLoomSession(browserSession) {
             thumbnailSize: { width: 0, height: 0 },
             types: ["screen"],
           });
-          const selectedSource = sources[0];
+          const selectedSource = pickScreenSourceForRecording(sources);
 
           if (!selectedSource) {
             console.error("No display source available for Loom recording.");
             callback({});
             return;
           }
+
+          console.log(
+            "Selected display source for Loom recording:",
+            selectedSource.name,
+            `(display_id=${selectedSource.display_id || "n/a"})`,
+          );
 
           callback({
             audio: false,
@@ -465,12 +637,35 @@ app.on("web-contents-created", (_, contents) => {
     return createWindowOpenHandler()(details);
   });
 
-  // Forward errors from Loom SDK iframes to terminal
-  contents.on("console-message", (_, level, message, line, sourceId) => {
-    if (level >= 2) {
-      console.log(`[iframe ${level === 2 ? "warn" : "error"}]`, message, sourceId ? `(${sourceId}:${line})` : "");
+  // Forward warnings/errors and CaptureDesk diagnostics from iframes to terminal
+  contents.on("console-message", (_, level, message, _line, sourceId) => {
+    if (level >= 2 || message.includes("[CaptureDesk]")) {
+      const tag = level <= 1 ? "log" : level === 2 ? "warn" : "error";
+      console.log(`[iframe ${tag}]`, message, sourceId ? `(${sourceId})` : "");
     }
   });
+
+  // Inject capture upscale override into every WebContents via CDP.
+  const captureScript = getCaptureOverrideScript();
+  if (captureScript) {
+    try {
+      contents.debugger.attach("1.3");
+      contents.debugger
+        .sendCommand("Page.addScriptToEvaluateOnNewDocument", { source: captureScript })
+        .catch((err) => console.warn("[CaptureDesk] CDP injection failed:", err.message));
+    } catch (err) {
+      console.warn("[CaptureDesk] Debugger attach failed:", err.message);
+    }
+
+    // Fallback for WebContents where CDP attach failed (guard flag prevents dupes)
+    contents.on("did-frame-finish-load", () => {
+      try {
+        for (const frame of contents.mainFrame.framesInSubtree) {
+          frame.executeJavaScript(captureScript).catch(() => {});
+        }
+      } catch { /* WebContents may already be destroyed */ }
+    });
+  }
 });
 
 app.whenReady().then(() => {
