@@ -44,7 +44,11 @@ if (dotenvPath) {
 // Pull private key and app ID from env
 const APP_ID = process.env.app_id;
 const LOOM_ENVIRONMENT = process.env.loom_environment || "production";
-const PORT = 8080;
+const parsedPort = Number.parseInt(process.env.PORT, 10);
+const PORT =
+  Number.isInteger(parsedPort) && parsedPort > 0 && parsedPort <= 65535
+    ? parsedPort
+    : 8080;
 const PUBLIC_DIR = path.join(__dirname, "../public");
 
 const app = express();
