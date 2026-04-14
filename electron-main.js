@@ -529,6 +529,11 @@ function registerRecordingShortcuts() {
       mainWindow.webContents.send("stop-recording");
     }
   });
+  globalShortcut.register("CommandOrControl+Shift+P", () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("pause-recording");
+    }
+  });
   globalShortcut.register("CommandOrControl+Shift+D", () => {
     toggleDrawOverlay();
   });
@@ -602,6 +607,18 @@ ipcMain.on("recording-stopped", () => {
 ipcMain.on("request-stop-recording", () => {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send("stop-recording");
+  }
+});
+
+ipcMain.on("request-pause-recording", () => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("pause-recording");
+  }
+});
+
+ipcMain.on("recording-pause-state-changed", (_, isPaused) => {
+  if (controlsWindow && !controlsWindow.isDestroyed()) {
+    controlsWindow.webContents.send("recording-pause-state-changed", isPaused);
   }
 });
 

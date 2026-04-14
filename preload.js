@@ -11,6 +11,10 @@ contextBridge.exposeInMainWorld("electronAPI", {
   sendRecordingStopped: () => ipcRenderer.send("recording-stopped"),
   requestStopRecording: () => ipcRenderer.send("request-stop-recording"),
   onStopRecording: (callback) => ipcRenderer.on("stop-recording", () => callback()),
+  requestPauseRecording: () => ipcRenderer.send("request-pause-recording"),
+  onPauseRecording: (callback) => ipcRenderer.on("pause-recording", () => callback()),
+  sendRecordingPauseState: (isPaused) => ipcRenderer.send("recording-pause-state-changed", isPaused),
+  onRecordingPauseStateChanged: (callback) => ipcRenderer.on("recording-pause-state-changed", (_, isPaused) => callback(isPaused)),
 
   // Drawing overlay — lifecycle
   requestToggleDraw: () => ipcRenderer.send("request-toggle-draw"),

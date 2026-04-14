@@ -33,6 +33,11 @@
         flex-shrink: 0;
         animation: blink 1.4s ease-in-out infinite;
       }
+      .rec-dot.paused {
+        background: #f59e0b;
+        animation: none;
+        opacity: 1;
+      }
       @keyframes blink {
         0%, 100% { opacity: 1; }
         50%       { opacity: 0.2; }
@@ -125,6 +130,14 @@
 
       <div class="divider"></div>
 
+      <!-- Pause/Resume toggle -->
+      <button class="ctrl-btn" id="pause-btn" title="Pausieren (Ctrl+Shift+P)">
+        <svg viewBox="0 0 24 24">
+          <rect x="5" y="4" width="4" height="16" rx="1"/>
+          <rect x="15" y="4" width="4" height="16" rx="1"/>
+        </svg>
+      </button>
+
       <!-- Draw toggle -->
       <button class="ctrl-btn" id="draw-btn" title="Zeichnen (Ctrl+Shift+D)">
         <svg viewBox="0 0 24 24">
@@ -191,6 +204,16 @@
       const drawBtn    = document.getElementById("draw-btn");
       const drawTools  = document.getElementById("draw-tools");
       const stopBtn    = document.getElementById("stop-btn");
+      const pauseBtn   = document.getElementById("pause-btn");
+      const recDot     = document.getElementById("rec-dot");
+
+      const PAUSE_ICON = `<svg viewBox="0 0 24 24">
+        <rect x="5" y="4" width="4" height="16" rx="1"/>
+        <rect x="15" y="4" width="4" height="16" rx="1"/>
+      </svg>`;
+      const RESUME_ICON = `<svg viewBox="0 0 24 24">
+        <path d="M8 5v14l11-7z"/>
+      </svg>`;
 
       function updateTimerDisplay() {
         const min = String(Math.floor(elapsed / 60)).padStart(2, "0");
@@ -203,12 +226,41 @@
         timerInterval = setInterval(() => { elapsed++; updateTimerDisplay(); }, 1000);
       }
 
+      function stopTimer() {
+        if (timerInterval) {
+          clearInterval(timerInterval);
+          timerInterval = null;
+        }
+      }
+
+      function setPauseState(paused) {
+        if (paused) {
+          stopTimer();
+          pauseBtn.innerHTML = RESUME_ICON;
+          pauseBtn.title = "Fortsetzen (Ctrl+Shift+P)";
+          pauseBtn.classList.add("active");
+          recDot.classList.add("paused");
+        } else {
+          startTimer();
+          pauseBtn.innerHTML = PAUSE_ICON;
+          pauseBtn.title = "Pausieren (Ctrl+Shift+P)";
+          pauseBtn.classList.remove("active");
+          recDot.classList.remove("paused");
+        }
+      }
+
       startTimer();
 
       // ── Main control buttons ───────────────────────────────────────
       stopBtn.addEventListener("click", () => {
         if (window.electronAPI?.requestStopRecording) {
           window.electronAPI.requestStopRecording();
+        }
+      });
+
+      pauseBtn.addEventListener("click", () => {
+        if (window.electronAPI?.requestPauseRecording) {
+          window.electronAPI.requestPauseRecording();
         }
       });
 
@@ -264,6 +316,11 @@
             drawBtn.title = active
               ? "Zeichnen beenden (Ctrl+Shift+D)"
               : "Zeichnen (Ctrl+Shift+D)";
+          });
+        }
+        if (typeof window.electronAPI.onRecordingPauseStateChanged === "function") {
+          window.electronAPI.onRecordingPauseStateChanged((paused) => {
+            setPauseState(paused);
           });
         }
       }

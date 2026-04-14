@@ -157,6 +157,35 @@ window.global = window;
       });
     }
 
+    if (window.electronAPI && typeof window.electronAPI.onPauseRecording === "function") {
+      window.electronAPI.onPauseRecording(() => {
+        try {
+          sdkButton.store.dispatch({ type: "consumer_trigger/toggle_pause_recording" });
+        } catch (err) {
+          appendLog("togglePauseRecording dispatch threw", err.message);
+        }
+      });
+    }
+
+    // Forward pause state changes from the SDK store to the controls window
+    if (sdkButton.store && typeof sdkButton.store.subscribe === "function") {
+      let lastPauseState = false;
+      sdkButton.store.subscribe(() => {
+        try {
+          const state = sdkButton.store.getState();
+          const isPaused = !!(state && state.recorder && state.recorder.appStage === "paused");
+          if (isPaused !== lastPauseState) {
+            lastPauseState = isPaused;
+            if (window.electronAPI && typeof window.electronAPI.sendRecordingPauseState === "function") {
+              window.electronAPI.sendRecordingPauseState(isPaused);
+            }
+          }
+        } catch (err) {
+          // Store may not be ready yet — ignore
+        }
+      });
+    }
+
     recordButton.disabled = false;
     setStatus("Ready to record", "ready");
   }
