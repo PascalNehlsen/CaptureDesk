@@ -217,36 +217,61 @@ function getCaptureOverrideScript() {
   return _captureOverrideScript;
 }
 
+// Returns { source, display } — display is the Electron Display object that
+// best matches the selected capture source, so the draw overlay can be placed
+// on exactly the screen being recorded.
+// On Linux, source.display_id is often empty, so we fall back to matching by
+// source order: desktopCapturer sources and screen.getAllDisplays() are both
+// sorted by display index, so source[i] corresponds to display[i].
 function pickScreenSourceForRecording(sources) {
   if (!Array.isArray(sources) || sources.length === 0) {
     return null;
   }
 
-  const primaryDisplayId = normalizeDisplayId(screen.getPrimaryDisplay()?.id);
+  const allDisplays = screen.getAllDisplays();
+  const primaryDisplay = screen.getPrimaryDisplay();
+
+  // Helper: given a source, find its matching display via display_id (when
+  // available) or by positional index as a fallback.
+  function displayForSource(source, sourceIndex) {
+    const sid = normalizeDisplayId(source.display_id);
+    if (sid) {
+      const byId = allDisplays.find((d) => normalizeDisplayId(d.id) === sid);
+      if (byId) return byId;
+    }
+    // Positional fallback: source order matches display order on Linux/X11
+    return allDisplays[sourceIndex] || primaryDisplay;
+  }
+
+  // 1. Try to find the source whose display_id matches the primary display
+  const primaryDisplayId = normalizeDisplayId(primaryDisplay?.id);
   if (primaryDisplayId) {
-    const primaryMatch = sources.find((source) => normalizeDisplayId(source.display_id) === primaryDisplayId);
-    if (primaryMatch) {
-      return primaryMatch;
+    const idx = sources.findIndex((s) => normalizeDisplayId(s.display_id) === primaryDisplayId);
+    if (idx !== -1) {
+      return { source: sources[idx], display: primaryDisplay };
     }
   }
 
+  // 2. Try any source that has a display_id matching a known display
   const availableDisplayIds = new Set(
-    screen
-      .getAllDisplays()
-      .map((display) => normalizeDisplayId(display.id))
-      .filter(Boolean),
+    allDisplays.map((d) => normalizeDisplayId(d.id)).filter(Boolean),
   );
-
-  const matchedDisplaySource = sources.find((source) => {
-    const sourceDisplayId = normalizeDisplayId(source.display_id);
-    return sourceDisplayId && availableDisplayIds.has(sourceDisplayId);
+  const matchedIdx = sources.findIndex((s) => {
+    const sid = normalizeDisplayId(s.display_id);
+    return sid && availableDisplayIds.has(sid);
   });
-  if (matchedDisplaySource) {
-    return matchedDisplaySource;
+  if (matchedIdx !== -1) {
+    return { source: sources[matchedIdx], display: displayForSource(sources[matchedIdx], matchedIdx) };
   }
 
-  const numberedScreenSource = sources.find((source) => /^screen\s+\d+$/i.test(source.name));
-  return numberedScreenSource || sources[0];
+  // 3. "Screen N" named source
+  const numberedIdx = sources.findIndex((s) => /^screen\s+\d+$/i.test(s.name));
+  if (numberedIdx !== -1) {
+    return { source: sources[numberedIdx], display: displayForSource(sources[numberedIdx], numberedIdx) };
+  }
+
+  // 4. First source
+  return { source: sources[0], display: displayForSource(sources[0], 0) };
 }
 
 function configureLoomSession(browserSession) {
@@ -278,18 +303,19 @@ function configureLoomSession(browserSession) {
             thumbnailSize: { width: 0, height: 0 },
             types: ["screen"],
           });
-          const selectedSource = pickScreenSourceForRecording(sources);
+          const picked = pickScreenSourceForRecording(sources);
 
-          if (!selectedSource) {
+          if (!picked) {
             console.error("No display source available for Loom recording.");
             callback({});
             return;
           }
 
+          const { source: selectedSource, display: selectedDisplay } = picked;
           console.log(
             "Selected display source for Loom recording:",
             selectedSource.name,
-            `(display_id=${selectedSource.display_id || "n/a"})`,
+            `(display_id=${selectedSource.display_id || "n/a"}, resolved display bounds: ${JSON.stringify(selectedDisplay.bounds)})`,
           );
 
           callback({
@@ -361,13 +387,13 @@ function createCameraWindow() {
   if (cameraWindow && !cameraWindow.isDestroyed()) return;
 
   const primaryDisplay = screen.getPrimaryDisplay();
-  const { height } = primaryDisplay.workAreaSize;
+  const { x: dispX, y: dispY, height } = primaryDisplay.workArea;
 
   cameraWindow = new BrowserWindow({
     width: 200,
     height: 200,
-    x: 20,
-    y: height - 220,
+    x: dispX + 20,
+    y: dispY + height - 220,
     frame: false,
     transparent: true,
     alwaysOnTop: true,
@@ -394,14 +420,14 @@ function createControlsWindow() {
   if (controlsWindow && !controlsWindow.isDestroyed()) return;
 
   const primaryDisplay = screen.getPrimaryDisplay();
-  const { width } = primaryDisplay.workAreaSize;
+  const { x: dispX, y: dispY, width } = primaryDisplay.workArea;
   const controlsWidth = CONTROLS_WIDTH_NORMAL;
 
   controlsWindow = new BrowserWindow({
     width: controlsWidth,
     height: 60,
-    x: Math.round((width - controlsWidth) / 2),
-    y: 20,
+    x: dispX + Math.round((width - controlsWidth) / 2),
+    y: dispY + 20,
     frame: false,
     transparent: true,
     alwaysOnTop: true,
@@ -442,17 +468,27 @@ function raiseOverlayUiWindows() {
   }
 }
 
+// Returns a bounding rect that covers every connected display so the draw
+// overlay works regardless of which screen is being recorded.
+function getVirtualDesktopBounds() {
+  const displays = screen.getAllDisplays();
+  const minX = Math.min(...displays.map((d) => d.bounds.x));
+  const minY = Math.min(...displays.map((d) => d.bounds.y));
+  const maxRight = Math.max(...displays.map((d) => d.bounds.x + d.bounds.width));
+  const maxBottom = Math.max(...displays.map((d) => d.bounds.y + d.bounds.height));
+  return { x: minX, y: minY, width: maxRight - minX, height: maxBottom - minY };
+}
+
 function createDrawOverlayWindow() {
   if (drawOverlayWindow && !drawOverlayWindow.isDestroyed()) return;
 
-  const primaryDisplay = screen.getPrimaryDisplay();
-  const { width, height } = primaryDisplay.size;
+  const { x, y, width, height } = getVirtualDesktopBounds();
 
   drawOverlayWindow = new BrowserWindow({
     width,
     height,
-    x: 0,
-    y: 0,
+    x,
+    y,
     frame: false,
     transparent: true,
     alwaysOnTop: true,
@@ -547,9 +583,9 @@ function resizeControlsWindow(width) {
   if (!controlsWindow || controlsWindow.isDestroyed()) return;
   const bounds = controlsWindow.getBounds();
   const primaryDisplay = screen.getPrimaryDisplay();
-  const { width: screenW } = primaryDisplay.workAreaSize;
+  const { x: dispX, width: screenW } = primaryDisplay.workArea;
   controlsWindow.setBounds({
-    x: Math.round((screenW - width) / 2),
+    x: dispX + Math.round((screenW - width) / 2),
     y: bounds.y,
     width,
     height: bounds.height,
