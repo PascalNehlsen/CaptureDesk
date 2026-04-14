@@ -29,7 +29,7 @@ fi
 
 COMMON_CHROMIUM_ARGS=("${SANDBOX_ARGS[@]}" "${OZONE_ARGS[@]}" --disable-gpu-sandbox --disable-software-rasterizer)
 
-LAUNCH_TARGET="${CAPTUREDESK_LAUNCH_TARGET:-auto}"
+LAUNCH_TARGET="${CAPTUREDESK_LAUNCH_TARGET:-dev}"
 echo "LAUNCH_TARGET: ${LAUNCH_TARGET}"
 echo "COMMON_CHROMIUM_ARGS: ${COMMON_CHROMIUM_ARGS[*]}"
 
@@ -83,6 +83,33 @@ ensure_unpacked_sandbox_compat() {
     echo "Added --no-sandbox (chrome-sandbox owner=${sandbox_owner}, mode=${sandbox_mode})"
   fi
 }
+
+ensure_dev_sandbox_compat() {
+  local sandbox_bin="${ROOT_DIR}/node_modules/electron/dist/chrome-sandbox"
+
+  if [[ "${ELECTRON_NO_SANDBOX:-0}" == "1" ]]; then
+    return 0
+  fi
+
+  if [[ ! -f "${sandbox_bin}" ]]; then
+    return 0
+  fi
+
+  local sandbox_owner sandbox_mode
+  sandbox_owner="$(stat -c '%u' "${sandbox_bin}" 2>/dev/null || echo '?')"
+  sandbox_mode="$(stat -c '%a' "${sandbox_bin}" 2>/dev/null || echo '?')"
+
+  if [[ "${sandbox_owner}" != "0" ]] || [[ "${sandbox_mode}" != "4755" ]]; then
+    COMMON_CHROMIUM_ARGS=(--no-sandbox "${COMMON_CHROMIUM_ARGS[@]}")
+    echo "Added --no-sandbox for dev runtime (chrome-sandbox owner=${sandbox_owner}, mode=${sandbox_mode})"
+  fi
+}
+
+if [[ "${LAUNCH_TARGET}" == "dev" ]]; then
+  ensure_dev_sandbox_compat
+  echo "Launching dev Electron runtime"
+  exec env -u ELECTRON_RUN_AS_NODE ./node_modules/electron/dist/electron . "${COMMON_CHROMIUM_ARGS[@]}"
+fi
 
 if [[ "${LAUNCH_TARGET}" == "unpacked" || "${LAUNCH_TARGET}" == "auto" ]]; then
   if UNPACKED_BIN="$(find_unpacked_binary)"; then

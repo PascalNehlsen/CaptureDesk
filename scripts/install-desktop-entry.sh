@@ -8,8 +8,13 @@ DESKTOP_FILE="${DESKTOP_DIR}/capturedesk.desktop"
 LEGACY_DESKTOP_FILE="${DESKTOP_DIR}/CaptureDesk.desktop"
 USER_DESKTOP_DIR="${HOME}/Desktop"
 USER_DESKTOP_FILE="${USER_DESKTOP_DIR}/CaptureDesk.desktop"
+ICON_THEME_DIR="${HOME}/.local/share/icons/hicolor/scalable/apps"
+ICON_THEME_FILE="${ICON_THEME_DIR}/capturedesk.svg"
 
 mkdir -p "${DESKTOP_DIR}"
+mkdir -p "${ICON_THEME_DIR}"
+
+cp "${ROOT_DIR}/assets/capturedesk.svg" "${ICON_THEME_FILE}"
 
 cat > "${DESKTOP_FILE}" <<EOF
 [Desktop Entry]
@@ -18,7 +23,7 @@ Type=Application
 Name=CaptureDesk
 Comment=Launch the CaptureDesk Electron app
 Exec=${ROOT_DIR}/scripts/launch-desktop.sh
-Icon=${ROOT_DIR}/assets/capturedesk.svg
+Icon=capturedesk
 Path=${ROOT_DIR}
 Terminal=false
 Categories=Utility;
@@ -29,13 +34,31 @@ EOF
 chmod +x "${ROOT_DIR}/scripts/launch-desktop.sh"
 chmod +x "${DESKTOP_FILE}"
 
-# Keep a compatibility launcher with the legacy desktop-id casing so
-# panel favorites that still reference it continue to work.
-cp "${DESKTOP_FILE}" "${LEGACY_DESKTOP_FILE}"
+# Keep a hidden legacy launcher id so existing Dash favorites continue to work
+# without creating a second visible search result.
+cat > "${LEGACY_DESKTOP_FILE}" <<EOF
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=CaptureDesk
+Comment=Launch the CaptureDesk Electron app
+Exec=${ROOT_DIR}/scripts/launch-desktop.sh
+Icon=capturedesk
+Path=${ROOT_DIR}
+Terminal=false
+Categories=Utility;
+StartupNotify=true
+StartupWMClass=CaptureDesk
+NoDisplay=true
+EOF
 chmod +x "${LEGACY_DESKTOP_FILE}"
 
 if command -v update-desktop-database >/dev/null 2>&1; then
   update-desktop-database "${DESKTOP_DIR}" || true
+fi
+
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+  gtk-update-icon-cache -f -t "${HOME}/.local/share/icons/hicolor" || true
 fi
 
 if [ -d "${USER_DESKTOP_DIR}" ]; then
@@ -48,3 +71,4 @@ if [ -d "${USER_DESKTOP_DIR}" ]; then
 fi
 
 echo "Installed desktop launcher: ${DESKTOP_FILE}"
+echo "Installed icon theme asset: ${ICON_THEME_FILE}"
