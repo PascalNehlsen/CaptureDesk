@@ -7,6 +7,8 @@ try {
 }
 
 const { app, BrowserWindow, desktopCapturer, globalShortcut, ipcMain, screen, session, shell } = electronMain;
+const { execSync } = require("child_process");
+const fs = require("fs");
 const path = require("path");
 const { start, PORT } = require("./src/server/index.js");
 
@@ -20,6 +22,34 @@ let mainWindowBounds = null;
 let drawingActive = false;
 const CONTROLS_WIDTH_NORMAL = 380;
 const CONTROLS_WIDTH_DRAWING = 920;
+let preferredUiDisplayId = null;
+const UI_SETTINGS_FILE = "ui-settings.json";
+
+function getUiSettingsPath() {
+  return path.join(app.getPath("userData"), UI_SETTINGS_FILE);
+}
+
+function loadUiSettings() {
+  try {
+    const raw = fs.readFileSync(getUiSettingsPath(), "utf8");
+    const parsed = JSON.parse(raw);
+    preferredUiDisplayId = normalizeDisplayId(parsed?.preferredUiDisplayId);
+  } catch {
+    preferredUiDisplayId = null;
+  }
+}
+
+function saveUiSettings() {
+  try {
+    fs.writeFileSync(
+      getUiSettingsPath(),
+      JSON.stringify({ preferredUiDisplayId }, null, 2),
+      "utf8",
+    );
+  } catch (error) {
+    console.warn("Failed to save UI settings:", error.message);
+  }
+}
 
 function isLoomUrl(rawUrl) {
   try {
@@ -90,6 +120,124 @@ function normalizeDisplayId(value) {
   return String(value);
 }
 
+function getSafeDisplayArea(display) {
+  const area = display?.workArea || display?.bounds;
+  if (
+    area
+    && Number.isFinite(area.x)
+    && Number.isFinite(area.y)
+    && Number.isFinite(area.width)
+    && Number.isFinite(area.height)
+    && area.width > 0
+    && area.height > 0
+  ) {
+    return area;
+  }
+
+  const primary = screen.getPrimaryDisplay();
+  const primaryArea = primary?.workArea || primary?.bounds;
+  if (
+    primaryArea
+    && Number.isFinite(primaryArea.x)
+    && Number.isFinite(primaryArea.y)
+    && Number.isFinite(primaryArea.width)
+    && Number.isFinite(primaryArea.height)
+    && primaryArea.width > 0
+    && primaryArea.height > 0
+  ) {
+    return primaryArea;
+  }
+
+  return { x: 0, y: 0, width: 1920, height: 1080 };
+}
+
+function getUiDisplays() {
+  const linuxConnectorNames = getLinuxConnectorNamesByBounds();
+
+  return screen.getAllDisplays().map((display, index) => {
+    const area = getSafeDisplayArea(display);
+    return {
+      id: normalizeDisplayId(display.id),
+      index,
+      name: getDisplayName(display, index, linuxConnectorNames),
+      primary: !!display?.primary,
+      width: area.width,
+      height: area.height,
+    };
+  });
+}
+
+function getDisplayName(display, index, linuxConnectorNames) {
+  const label = typeof display?.label === "string" ? display.label.trim() : "";
+  if (label) return label;
+
+  const area = getSafeDisplayArea(display);
+  const key = `${area.x},${area.y},${area.width},${area.height}`;
+  const connector = linuxConnectorNames.get(key);
+  if (connector) {
+    if (/^(eDP|LVDS)/i.test(connector)) return `Laptop-Display (${connector})`;
+    if (/^HDMI/i.test(connector)) return `HDMI-Display (${connector})`;
+    if (/^DP/i.test(connector)) return `DisplayPort-Display (${connector})`;
+    if (/^DVI/i.test(connector)) return `DVI-Display (${connector})`;
+    if (/^VGA/i.test(connector)) return `VGA-Display (${connector})`;
+    return `Externer Bildschirm (${connector})`;
+  }
+
+  return `Monitor ${index + 1}`;
+}
+
+function getLinuxConnectorNamesByBounds() {
+  if (process.platform !== "linux") return new Map();
+
+  try {
+    const output = execSync("xrandr --listactivemonitors", {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+
+    const mapping = new Map();
+    const lines = output.split("\n").map((line) => line.trim()).filter(Boolean);
+
+    for (const line of lines) {
+      const match = line.match(/\s(\d+)\/\d+x(\d+)\/\d+\+(-?\d+)\+(-?\d+)\s+(.+)$/);
+      if (!match) continue;
+      const width = Number(match[1]);
+      const height = Number(match[2]);
+      const x = Number(match[3]);
+      const y = Number(match[4]);
+      const connector = String(match[5] || "").trim();
+      if (!connector) continue;
+      mapping.set(`${x},${y},${width},${height}`, connector);
+    }
+
+    return mapping;
+  } catch {
+    return new Map();
+  }
+}
+
+function getResolvedUiDisplay() {
+  const displays = screen.getAllDisplays();
+  if (displays.length === 0) {
+    return screen.getPrimaryDisplay();
+  }
+
+  if (preferredUiDisplayId) {
+    const matched = displays.find((d) => normalizeDisplayId(d.id) === preferredUiDisplayId);
+    if (matched) return matched;
+  }
+
+  return screen.getPrimaryDisplay() || displays[0];
+}
+
+function setPreferredUiDisplayId(displayId) {
+  const normalized = normalizeDisplayId(displayId);
+  const displays = screen.getAllDisplays();
+  const matched = displays.find((d) => normalizeDisplayId(d.id) === normalized);
+  preferredUiDisplayId = normalizeDisplayId((matched || screen.getPrimaryDisplay())?.id);
+  saveUiSettings();
+}
+
 // ---------------------------------------------------------------------------
 // Native-resolution upscale for display capture
 // ---------------------------------------------------------------------------
@@ -100,8 +248,9 @@ function normalizeDisplayId(value) {
 // fine — no bars, no crop needed.
 //
 // Fix: intercept getDisplayMedia and upscale every frame back to the native
-// display resolution via Insertable Streams + OffscreenCanvas. No content
-// is cropped or distorted — we simply undo Electron's downscale.
+// display resolution via Insertable Streams + OffscreenCanvas.
+// To avoid distortion when the selected monitor has a different aspect ratio
+// than the primary display, frames are fit proportionally (no stretching).
 //
 // Injection: CDP Page.addScriptToEvaluateOnNewDocument runs the script BEFORE
 // any page scripts in every frame (including cross-origin Loom SDK iframes),
@@ -114,6 +263,10 @@ function getCaptureOverrideScript() {
   if (_captureOverrideScript !== undefined) return _captureOverrideScript;
 
   const { width: nativeW, height: nativeH } = screen.getPrimaryDisplay().size;
+  const displayTargets = screen
+    .getAllDisplays()
+    .map((d) => ({ width: Number(d?.size?.width), height: Number(d?.size?.height) }))
+    .filter((d) => d.width > 0 && d.height > 0);
 
   console.log(`[CaptureDesk] Display is ${nativeW}x${nativeH} — will upscale capture to native resolution`);
 
@@ -123,8 +276,51 @@ function getCaptureOverrideScript() {
     window.__capturedeskApplied = true;
     if (!navigator.mediaDevices || typeof navigator.mediaDevices.getDisplayMedia !== 'function') return;
 
-    var NATIVE_W = ${nativeW};
-    var NATIVE_H = ${nativeH};
+    var DEFAULT_NATIVE_W = ${nativeW};
+    var DEFAULT_NATIVE_H = ${nativeH};
+    var DISPLAY_TARGETS = ${JSON.stringify(displayTargets)};
+
+    function pickBestTargetForSource(srcW, srcH) {
+      if (!(srcW > 0 && srcH > 0) || !Array.isArray(DISPLAY_TARGETS) || DISPLAY_TARGETS.length === 0) {
+        return { width: DEFAULT_NATIVE_W, height: DEFAULT_NATIVE_H };
+      }
+
+      var srcAspect = srcW / srcH;
+      var best = null;
+      var bestScore = Number.POSITIVE_INFINITY;
+
+      for (var i = 0; i < DISPLAY_TARGETS.length; i++) {
+        var t = DISPLAY_TARGETS[i] || {};
+        var w = Number(t.width);
+        var h = Number(t.height);
+        if (!(w > 0 && h > 0)) continue;
+
+        var aspect = w / h;
+        var aspectDiff = Math.abs(aspect - srcAspect);
+        var scaleX = w / srcW;
+        var scaleY = h / srcH;
+        var scaleSkew = Math.abs(scaleX - scaleY);
+
+        // Strongly prefer aspect match, then prefer close proportional scale.
+        var score = (aspectDiff * 1000) + (scaleSkew * 100) + Math.abs(1 - Math.min(scaleX, scaleY));
+        if (score < bestScore) {
+          bestScore = score;
+          best = { width: Math.round(w), height: Math.round(h) };
+        }
+      }
+
+      return best || { width: DEFAULT_NATIVE_W, height: DEFAULT_NATIVE_H };
+    }
+
+    function getConfiguredTargetSize() {
+      var maybeTarget = window.__capturedeskTargetSize || {};
+      var w = Number(maybeTarget.width);
+      var h = Number(maybeTarget.height);
+      if (w > 0 && h > 0) {
+        return { width: Math.round(w), height: Math.round(h) };
+      }
+      return { width: DEFAULT_NATIVE_W, height: DEFAULT_NATIVE_H };
+    }
 
     console.warn('[CaptureDesk] Override installed in: ' + location.href.substring(0, 120));
 
@@ -148,7 +344,15 @@ function getCaptureOverrideScript() {
     };
 
     function buildUpscaledStream(originalStream, srcTrack) {
-      var canvas = new OffscreenCanvas(NATIVE_W, NATIVE_H);
+      var initialSettings = srcTrack.getSettings ? srcTrack.getSettings() : {};
+      var initialSourceW = Number(initialSettings.width) || 0;
+      var initialSourceH = Number(initialSettings.height) || 0;
+      var inferredTarget = pickBestTargetForSource(initialSourceW, initialSourceH);
+      var initialTarget = getConfiguredTargetSize();
+      if (!(window.__capturedeskTargetSize && window.__capturedeskTargetSize.width && window.__capturedeskTargetSize.height)) {
+        initialTarget = inferredTarget;
+      }
+      var canvas = new OffscreenCanvas(initialTarget.width, initialTarget.height);
       var ctx    = canvas.getContext('2d');
       var logged = false;
 
@@ -160,13 +364,44 @@ function getCaptureOverrideScript() {
           try {
             var fW = frame.displayWidth  || frame.codedWidth;
             var fH = frame.displayHeight || frame.codedHeight;
+            var target = getConfiguredTargetSize();
+            if (!(window.__capturedeskTargetSize && window.__capturedeskTargetSize.width && window.__capturedeskTargetSize.height)) {
+              target = pickBestTargetForSource(fW, fH);
+            }
+            var targetW = target.width;
+            var targetH = target.height;
 
-            if (fW === NATIVE_W && fH === NATIVE_H) {
+            if (canvas.width !== targetW || canvas.height !== targetH) {
+              canvas.width = targetW;
+              canvas.height = targetH;
+            }
+
+            if (fW === targetW && fH === targetH) {
               ctrl.enqueue(frame);
               return;
             }
 
-            ctx.drawImage(frame, 0, 0, fW, fH, 0, 0, NATIVE_W, NATIVE_H);
+            var srcAspect = fW / fH;
+            var dstAspect = targetW / targetH;
+            var drawW = targetW;
+            var drawH = targetH;
+            var drawX = 0;
+            var drawY = 0;
+
+            if (Math.abs(srcAspect - dstAspect) > 0.001) {
+              if (srcAspect > dstAspect) {
+                drawW = targetW;
+                drawH = Math.round(targetW / srcAspect);
+                drawY = Math.floor((targetH - drawH) / 2);
+              } else {
+                drawH = targetH;
+                drawW = Math.round(targetH * srcAspect);
+                drawX = Math.floor((targetW - drawW) / 2);
+              }
+            }
+
+            ctx.clearRect(0, 0, targetW, targetH);
+            ctx.drawImage(frame, 0, 0, fW, fH, drawX, drawY, drawW, drawH);
 
             var init = { timestamp: frame.timestamp };
             if (frame.duration != null) init.duration = frame.duration;
@@ -175,7 +410,8 @@ function getCaptureOverrideScript() {
 
             if (!logged) {
               console.warn('[CaptureDesk] Frame 0: ' + fW + 'x' + fH +
-                ' -> ' + out.codedWidth + 'x' + out.codedHeight);
+                ' -> ' + out.codedWidth + 'x' + out.codedHeight +
+                ' (draw ' + drawW + 'x' + drawH + ' at ' + drawX + ',' + drawY + ')');
               logged = true;
             }
 
@@ -199,7 +435,11 @@ function getCaptureOverrideScript() {
       var audio  = originalStream.getAudioTracks();
       for (var i = 0; i < audio.length; i++) tracks.push(audio[i]);
 
-      console.warn('[CaptureDesk] Pipeline active -> ' + NATIVE_W + 'x' + NATIVE_H);
+      var finalTarget = getConfiguredTargetSize();
+      if (!(window.__capturedeskTargetSize && window.__capturedeskTargetSize.width && window.__capturedeskTargetSize.height)) {
+        finalTarget = inferredTarget;
+      }
+      console.warn('[CaptureDesk] Pipeline active -> ' + finalTarget.width + 'x' + finalTarget.height);
       return new MediaStream(tracks);
     }
 
@@ -207,8 +447,14 @@ function getCaptureOverrideScript() {
       var _orig = track.getSettings.bind(track);
       track.getSettings = function() {
         var s = _orig();
-        s.width  = NATIVE_W;
-        s.height = NATIVE_H;
+        var target = getConfiguredTargetSize();
+        if (!(window.__capturedeskTargetSize && window.__capturedeskTargetSize.width && window.__capturedeskTargetSize.height)) {
+          var sWidth = Number(s.width) || 0;
+          var sHeight = Number(s.height) || 0;
+          target = pickBestTargetForSource(sWidth, sHeight);
+        }
+        s.width  = target.width;
+        s.height = target.height;
         return s;
       };
     }
@@ -297,7 +543,7 @@ function configureLoomSession(browserSession) {
 
   if (typeof browserSession.setDisplayMediaRequestHandler === "function") {
     browserSession.setDisplayMediaRequestHandler(
-      async (_request, callback) => {
+      async (request, callback) => {
         try {
           const sources = await desktopCapturer.getSources({
             thumbnailSize: { width: 0, height: 0 },
@@ -312,10 +558,14 @@ function configureLoomSession(browserSession) {
           }
 
           const { source: selectedSource, display: selectedDisplay } = picked;
+          const selectedSize = selectedDisplay?.size || {};
+          const selectedW = Number(selectedSize.width);
+          const selectedH = Number(selectedSize.height);
+
           console.log(
             "Selected display source for Loom recording:",
             selectedSource.name,
-            `(display_id=${selectedSource.display_id || "n/a"}, resolved display bounds: ${JSON.stringify(selectedDisplay.bounds)})`,
+            `(display_id=${selectedSource.display_id || "n/a"}, resolved display bounds: ${JSON.stringify(selectedDisplay.bounds)}, target=${selectedW || "n/a"}x${selectedH || "n/a"})`,
           );
 
           callback({
@@ -386,8 +636,7 @@ function createWindow() {
 function createCameraWindow() {
   if (cameraWindow && !cameraWindow.isDestroyed()) return;
 
-  const primaryDisplay = screen.getPrimaryDisplay();
-  const { x: dispX, y: dispY, height } = primaryDisplay.workArea;
+  const { x: dispX, y: dispY, height } = getUiWorkArea();
 
   cameraWindow = new BrowserWindow({
     width: 200,
@@ -419,8 +668,7 @@ function createCameraWindow() {
 function createControlsWindow() {
   if (controlsWindow && !controlsWindow.isDestroyed()) return;
 
-  const primaryDisplay = screen.getPrimaryDisplay();
-  const { x: dispX, y: dispY, width } = primaryDisplay.workArea;
+  const { x: dispX, y: dispY, width } = getUiWorkArea();
   const controlsWidth = CONTROLS_WIDTH_NORMAL;
 
   controlsWindow = new BrowserWindow({
@@ -466,6 +714,11 @@ function raiseOverlayUiWindows() {
       controlsWindow.moveTop();
     }
   }
+}
+
+function getUiWorkArea() {
+  const display = getResolvedUiDisplay();
+  return getSafeDisplayArea(display);
 }
 
 // Returns a bounding rect that covers every connected display so the draw
@@ -582,14 +835,33 @@ function unregisterRecordingShortcuts() {
 function resizeControlsWindow(width) {
   if (!controlsWindow || controlsWindow.isDestroyed()) return;
   const bounds = controlsWindow.getBounds();
-  const primaryDisplay = screen.getPrimaryDisplay();
-  const { x: dispX, width: screenW } = primaryDisplay.workArea;
+  const { x: dispX, width: screenW } = getUiWorkArea();
   controlsWindow.setBounds({
     x: dispX + Math.round((screenW - width) / 2),
     y: bounds.y,
     width,
     height: bounds.height,
   });
+  raiseOverlayUiWindows();
+}
+
+function repositionUiWindows() {
+  const { x: dispX, y: dispY, width, height } = getUiWorkArea();
+
+  if (cameraWindow && !cameraWindow.isDestroyed()) {
+    cameraWindow.setBounds({ x: dispX + 20, y: dispY + height - 220, width: 200, height: 200 });
+  }
+
+  if (controlsWindow && !controlsWindow.isDestroyed()) {
+    const ctrlWidth = drawingActive ? CONTROLS_WIDTH_DRAWING : CONTROLS_WIDTH_NORMAL;
+    controlsWindow.setBounds({
+      x: dispX + Math.round((width - ctrlWidth) / 2),
+      y: dispY + 20,
+      width: ctrlWidth,
+      height: 60,
+    });
+  }
+
   raiseOverlayUiWindows();
 }
 
@@ -660,6 +932,20 @@ ipcMain.on("recording-pause-state-changed", (_, isPaused) => {
 
 ipcMain.on("request-toggle-draw", () => {
   toggleDrawOverlay();
+});
+
+ipcMain.handle("get-ui-displays", () => {
+  return getUiDisplays();
+});
+
+ipcMain.handle("get-preferred-ui-display", () => {
+  return normalizeDisplayId(getResolvedUiDisplay()?.id);
+});
+
+ipcMain.handle("set-preferred-ui-display", (_event, displayId) => {
+  setPreferredUiDisplayId(displayId);
+  repositionUiWindows();
+  return normalizeDisplayId(getResolvedUiDisplay()?.id);
 });
 
 ipcMain.on("clear-draw", () => {
@@ -736,6 +1022,8 @@ app.on("web-contents-created", (_, contents) => {
 });
 
 app.whenReady().then(() => {
+  loadUiSettings();
+
   start(() => {
     createWindow();
   });

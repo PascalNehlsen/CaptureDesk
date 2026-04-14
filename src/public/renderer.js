@@ -9,6 +9,7 @@ window.global = window;
   const debugLogElement = document.getElementById("debug-log");
   const consoleToggle = document.getElementById("console-toggle");
   const consoleChevron = document.getElementById("console-chevron");
+  const monitorSelect = document.getElementById("monitor-select");
 
   // ── Window controls (frameless title bar) ───────────────────────────────────
   document.getElementById("btn-minimize")?.addEventListener("click", () => {
@@ -42,6 +43,46 @@ window.global = window;
     statusElement.textContent = message;
     statusBadge.className = "status-badge " + state;
     recordContainer.classList.toggle("ready", state === "ready");
+  }
+
+  function getDisplayLabel(display) {
+    if (!display) return "Monitor";
+    const baseName = display.name || (typeof display.index === "number" ? `Monitor ${display.index + 1}` : "Monitor");
+    const size = display.width && display.height ? ` (${display.width}x${display.height})` : "";
+    const primary = display.primary ? " - Primaer" : "";
+    return `${baseName}${size}${primary}`;
+  }
+
+  async function populateMonitorSelector() {
+    if (!monitorSelect || !window.electronAPI?.getUiDisplays || !window.electronAPI?.getPreferredUiDisplay) {
+      if (monitorSelect) monitorSelect.disabled = true;
+      return;
+    }
+
+    try {
+      const [displays, preferredId] = await Promise.all([
+        window.electronAPI.getUiDisplays(),
+        window.electronAPI.getPreferredUiDisplay(),
+      ]);
+
+      monitorSelect.innerHTML = "";
+      const validDisplays = Array.isArray(displays) ? displays : [];
+
+      for (const display of validDisplays) {
+        const option = document.createElement("option");
+        option.value = String(display.id);
+        option.textContent = getDisplayLabel(display);
+        if (String(display.id) === String(preferredId)) {
+          option.selected = true;
+        }
+        monitorSelect.appendChild(option);
+      }
+
+      monitorSelect.disabled = validDisplays.length <= 1;
+    } catch (error) {
+      monitorSelect.disabled = true;
+      appendLog("Monitor list could not be loaded", error.message || String(error));
+    }
   }
 
   function isLoomOrigin(origin) {
@@ -201,6 +242,21 @@ window.global = window;
   window.addEventListener("unhandledrejection", (event) => {
     appendLog("Unhandled promise rejection", event.reason ? String(event.reason) : "unknown");
   });
+
+  monitorSelect?.addEventListener("change", async () => {
+    if (!window.electronAPI?.setPreferredUiDisplay) return;
+    try {
+      await window.electronAPI.setPreferredUiDisplay(monitorSelect.value);
+    } catch (error) {
+      appendLog("Failed to set UI monitor", error.message || String(error));
+    }
+  });
+
+  window.addEventListener("focus", () => {
+    populateMonitorSelector().catch(() => {});
+  });
+
+  populateMonitorSelector().catch(() => {});
 
   initializeLoom().catch((error) => {
     recordButton.disabled = true;

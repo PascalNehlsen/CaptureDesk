@@ -32,4 +32,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   sendDrawSize: (size) => ipcRenderer.send("draw-size-changed", size),
   onDrawSize: (callback) => ipcRenderer.on("draw-size-changed", (_, size) => callback(size)),
   requestRaiseOverlayUi: () => ipcRenderer.send("raise-overlay-ui"),
+  getUiDisplays: () => ipcRenderer.invoke("get-ui-displays"),
+  getPreferredUiDisplay: () => ipcRenderer.invoke("get-preferred-ui-display"),
+  setPreferredUiDisplay: (displayId) => ipcRenderer.invoke("set-preferred-ui-display", displayId),
 });
