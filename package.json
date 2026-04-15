@@ -16,15 +16,14 @@
     "@loomhq/loom-embed": "^1.7.0",
     "@loomhq/record-sdk": "^4.10.4",
     "dotenv": "^17.4.2",
-    "ejs": "3.1.6",
-    "express": "4.17.2",
-    "jose": "4.3.7"
+    "ejs": "3.1.10",
+    "express": "4.22.1"
   },
   "devDependencies": {
     "electron": "^41.2.0",
     "electron-builder": "^26.8.1",
     "esbuild": "^0.28.0",
-    "nodemon": "1.18.4"
+    "nodemon": "^3.1.14"
   },
   "keywords": [],
   "build": {
