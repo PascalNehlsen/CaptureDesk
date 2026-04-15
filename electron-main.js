@@ -638,10 +638,12 @@ function createCameraWindow() {
     resizable: false,
     skipTaskbar: true,
     hasShadow: false,
+    type: process.platform === "linux" ? "toolbar" : "normal",
     webPreferences: { ...BASE_PREFS, partition: LOOM_PARTITION },
   });
 
   cameraWindow.setContentProtection(true);
+  cameraWindow.setSkipTaskbar(true);
   cameraWindow.setVisibleOnAllWorkspaces(true);
   cameraWindow.loadFile(path.join(__dirname, "src", "views", "camera.html"));
   cameraWindow.on("closed", () => {
@@ -666,10 +668,12 @@ function createControlsWindow() {
     resizable: false,
     skipTaskbar: true,
     hasShadow: false,
+    type: process.platform === "linux" ? "toolbar" : "normal",
     webPreferences: { ...BASE_PREFS, preload: PRELOAD },
   });
 
   controlsWindow.setContentProtection(true);
+  controlsWindow.setSkipTaskbar(true);
   controlsWindow.setVisibleOnAllWorkspaces(true);
   controlsWindow.setAlwaysOnTop(true, "screen-saver");
   controlsWindow.loadFile(path.join(__dirname, "src", "views", "controls.html"));
@@ -678,7 +682,6 @@ function createControlsWindow() {
     // If user manually closes controls, restore main window
     closeCameraWindow();
     closeDrawOverlayWindow();
-    drawingActive = false;
     restoreMainWindow();
   });
 }
@@ -763,7 +766,6 @@ function closeDrawOverlayWindow() { closeWindow(drawOverlayWindow, true); drawOv
 
 function restoreMainWindow() {
   if (!mainWindow || mainWindow.isDestroyed()) return;
-  mainWindow.restore();
   mainWindow.show();
   mainWindow.focus();
   if (mainWindowBounds) {
@@ -855,7 +857,7 @@ ipcMain.on("window-close", () => {
 ipcMain.on("recording-started", () => {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   mainWindowBounds = mainWindow.getBounds();
-  mainWindow.minimize();
+  mainWindow.hide();
   createCameraWindow();
   createControlsWindow();
   registerRecordingShortcuts();
