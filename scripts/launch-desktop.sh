@@ -15,6 +15,32 @@ echo "PWD(before): ${PWD}"
 echo "ROOT_DIR: ${ROOT_DIR}"
 
 cd "${ROOT_DIR}"
+
+resolve_port_from_env_file() {
+  local env_file="$1"
+  if [[ ! -f "${env_file}" ]]; then
+    return 1
+  fi
+
+  local raw
+  raw="$(grep -E '^[[:space:]]*PORT[[:space:]]*=' "${env_file}" | tail -n 1 | cut -d '=' -f 2- | tr -d "'\"[:space:]")"
+  if [[ "${raw}" =~ ^[0-9]+$ ]] && (( raw >= 1 && raw <= 65535 )); then
+    echo "${raw}"
+    return 0
+  fi
+  return 1
+}
+
+if [[ -n "${CAPTUREDESK_PORT:-}" ]] && [[ "${CAPTUREDESK_PORT}" =~ ^[0-9]+$ ]] && (( CAPTUREDESK_PORT >= 1 && CAPTUREDESK_PORT <= 65535 )); then
+  export PORT="${CAPTUREDESK_PORT}"
+  echo "Using CAPTUREDESK_PORT: ${PORT}"
+elif PORT_FROM_DOTENV="$(resolve_port_from_env_file "${ROOT_DIR}/.env")"; then
+  export PORT="${PORT_FROM_DOTENV}"
+  echo "Using PORT from .env: ${PORT}"
+else
+  echo "Using inherited/default PORT: ${PORT:-<unset>}"
+fi
+
 SANDBOX_ARGS=()
 if [[ "${ELECTRON_NO_SANDBOX:-0}" == "1" ]]; then
   SANDBOX_ARGS+=(--no-sandbox)

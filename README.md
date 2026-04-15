@@ -35,6 +35,7 @@ Electron desktop app for screen recording with the Loom Record SDK, a custom dra
    ```env
    private_key="YOUR_PEM_FROM_YOUR_LOOM_APP"
    app_id="YOUR_APP_ID"
+   PORT=8090
    ```
 
 4. Start the app in development mode:
@@ -69,6 +70,7 @@ Electron desktop app for screen recording with the Loom Record SDK, a custom dra
 - `app_id`: Loom application ID
 - `private_key`: Loom private key
 - `loom_environment`: optional, defaults to `production`
+- `PORT`: optional, defaults to `8080` (valid range: `1-65535`)
 
 ### Relevant scripts
 
