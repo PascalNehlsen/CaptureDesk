@@ -22,6 +22,7 @@ const CONTROLS_WIDTH_NORMAL = 380;
 const CONTROLS_WIDTH_DRAWING = 920;
 function isDrawing() { return drawOverlayWindow !== null && !drawOverlayWindow.isDestroyed(); }
 let preferredUiDisplayId = null;
+let _connectorCache = null;
 
 const PRELOAD = path.join(__dirname, "preload.js");
 const BASE_PREFS = { contextIsolation: true, nodeIntegration: false, sandbox: true };
@@ -185,6 +186,7 @@ function getDisplayName(display, index, linuxConnectorNames) {
 
 function getLinuxConnectorNamesByBounds() {
   if (process.platform !== "linux") return new Map();
+  if (_connectorCache !== null) return _connectorCache;
 
   try {
     const output = execSync("xrandr --listactivemonitors", {
@@ -207,7 +209,8 @@ function getLinuxConnectorNamesByBounds() {
       mapping.set(`${x},${y},${width},${height}`, connector);
     }
 
-    return mapping;
+    _connectorCache = mapping;
+    return _connectorCache;
   } catch {
     return new Map();
   }
@@ -956,20 +959,17 @@ app.on("web-contents-created", (_, contents) => {
     } catch (err) {
       console.warn("[CaptureDesk] Debugger attach failed:", err.message);
     }
-
-    // Fallback for WebContents where CDP attach failed (guard flag prevents dupes)
-    contents.on("did-frame-finish-load", () => {
-      try {
-        for (const frame of contents.mainFrame.framesInSubtree) {
-          frame.executeJavaScript(captureScript).catch(() => {});
-        }
-      } catch { /* WebContents may already be destroyed */ }
-    });
   }
 });
 
 app.whenReady().then(() => {
   loadUiSettings();
+
+  // Invalidate xrandr connector cache when display topology changes
+  const clearConnectorCache = () => { _connectorCache = null; };
+  screen.on("display-added", clearConnectorCache);
+  screen.on("display-removed", clearConnectorCache);
+  screen.on("display-metrics-changed", clearConnectorCache);
 
   start(() => {
     createWindow();

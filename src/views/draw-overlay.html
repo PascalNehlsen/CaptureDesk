@@ -38,6 +38,12 @@
       const logicalW = window.innerWidth;
       const logicalH = window.innerHeight;
 
+      // Offscreen canvas: permanent layer of all completed strokes.
+      // Arrow/rect preview blits this in O(1) instead of replaying stroke history.
+      const bgCanvas = new OffscreenCanvas(canvas.width, canvas.height);
+      const bgCtx = bgCanvas.getContext("2d");
+      bgCtx.scale(dpr, dpr);
+
       // ── State ──────────────────────────────────────────────────────
       let currentTool = "pen";
       let currentColor = "#ef4444";
@@ -70,32 +76,36 @@
         }
       }
 
-      function redrawAll() {
-        ctx.clearRect(0, 0, logicalW, logicalH);
-        strokes.forEach(drawStroke);
-      }
-
-      function drawStroke(stroke) {
-        ctx.save();
-        applyToolStyle(ctx, stroke.tool, stroke.color, stroke.lineWidth);
+      // Draws a stroke to any context — used for bgCtx persistence and undo replay.
+      function drawStroke(context, stroke) {
+        context.save();
+        applyToolStyle(context, stroke.tool, stroke.color, stroke.lineWidth);
 
         if (stroke.tool === "pen" || stroke.tool === "highlighter" || stroke.tool === "eraser") {
-          if (stroke.points.length < 2) { ctx.restore(); return; }
-          ctx.beginPath();
-          ctx.moveTo(stroke.points[0].x, stroke.points[0].y);
+          if (stroke.points.length < 2) { context.restore(); return; }
+          context.beginPath();
+          context.moveTo(stroke.points[0].x, stroke.points[0].y);
           for (let i = 1; i < stroke.points.length; i++) {
-            ctx.lineTo(stroke.points[i].x, stroke.points[i].y);
+            context.lineTo(stroke.points[i].x, stroke.points[i].y);
           }
-          ctx.stroke();
+          context.stroke();
         } else if (stroke.tool === "arrow") {
-          drawArrowShape(ctx, stroke.x1, stroke.y1, stroke.x2, stroke.y2, stroke.lineWidth, stroke.color);
+          drawArrowShape(context, stroke.x1, stroke.y1, stroke.x2, stroke.y2, stroke.lineWidth, stroke.color);
         } else if (stroke.tool === "rect") {
-          ctx.strokeStyle = stroke.color;
-          ctx.lineWidth = stroke.lineWidth;
-          ctx.strokeRect(stroke.x1, stroke.y1, stroke.x2 - stroke.x1, stroke.y2 - stroke.y1);
+          context.strokeStyle = stroke.color;
+          context.lineWidth = stroke.lineWidth;
+          context.strokeRect(stroke.x1, stroke.y1, stroke.x2 - stroke.x1, stroke.y2 - stroke.y1);
         }
 
-        ctx.restore();
+        context.restore();
+      }
+
+      // Rebuilds bgCanvas from scratch then copies to ctx. Only called on undo.
+      function redrawAll() {
+        bgCtx.clearRect(0, 0, logicalW, logicalH);
+        strokes.forEach(s => drawStroke(bgCtx, s));
+        ctx.clearRect(0, 0, logicalW, logicalH);
+        ctx.drawImage(bgCanvas, 0, 0);
       }
 
       function drawArrowShape(c, x1, y1, x2, y2, lw, color) {
@@ -128,10 +138,15 @@
         currentPath = [{ x: e.clientX, y: e.clientY }];
 
         if (currentTool === "pen" || currentTool === "highlighter" || currentTool === "eraser") {
+          // Set up both contexts: ctx for display, bgCtx to stay in sync for previews
           ctx.save();
+          bgCtx.save();
           applyToolStyle(ctx, currentTool, currentColor, lineWidth);
+          applyToolStyle(bgCtx, currentTool, currentColor, lineWidth);
           ctx.beginPath();
           ctx.moveTo(e.clientX, e.clientY);
+          bgCtx.beginPath();
+          bgCtx.moveTo(e.clientX, e.clientY);
         }
       });
 
@@ -141,12 +156,17 @@
         if (currentTool === "pen" || currentTool === "highlighter" || currentTool === "eraser") {
           ctx.lineTo(e.clientX, e.clientY);
           ctx.stroke();
+          bgCtx.lineTo(e.clientX, e.clientY);
+          bgCtx.stroke();
           currentPath.push({ x: e.clientX, y: e.clientY });
         } else if (currentTool === "arrow") {
-          redrawAll();
+          // O(1) blit of completed layer, then draw live preview on top
+          ctx.clearRect(0, 0, logicalW, logicalH);
+          ctx.drawImage(bgCanvas, 0, 0);
           drawArrowShape(ctx, startX, startY, e.clientX, e.clientY, lineWidth, currentColor);
         } else if (currentTool === "rect") {
-          redrawAll();
+          ctx.clearRect(0, 0, logicalW, logicalH);
+          ctx.drawImage(bgCanvas, 0, 0);
           ctx.save();
           ctx.strokeStyle = currentColor;
           ctx.lineWidth = lineWidth;
@@ -161,11 +181,16 @@
 
         if (currentTool === "pen" || currentTool === "highlighter" || currentTool === "eraser") {
           ctx.restore();
+          bgCtx.restore(); // bgCtx already has the stroke from live drawing
           strokes.push({ tool: currentTool, color: currentColor, lineWidth, points: currentPath });
         } else if (currentTool === "arrow") {
-          strokes.push({ tool: "arrow", color: currentColor, lineWidth, x1: startX, y1: startY, x2: e.clientX, y2: e.clientY });
+          const stroke = { tool: "arrow", color: currentColor, lineWidth, x1: startX, y1: startY, x2: e.clientX, y2: e.clientY };
+          strokes.push(stroke);
+          drawStroke(bgCtx, stroke); // persist to bgCanvas for future previews
         } else if (currentTool === "rect") {
-          strokes.push({ tool: "rect", color: currentColor, lineWidth, x1: startX, y1: startY, x2: e.clientX, y2: e.clientY });
+          const stroke = { tool: "rect", color: currentColor, lineWidth, x1: startX, y1: startY, x2: e.clientX, y2: e.clientY };
+          strokes.push(stroke);
+          drawStroke(bgCtx, stroke);
         }
 
         currentPath = [];
@@ -184,7 +209,8 @@
         if (typeof window.electronAPI.onClearDraw === "function") {
           window.electronAPI.onClearDraw(() => {
             strokes.length = 0;
-            ctx.clearRect(0, 0, canvas.width / dpr, canvas.height / dpr);
+            bgCtx.clearRect(0, 0, logicalW, logicalH);
+            ctx.clearRect(0, 0, logicalW, logicalH);
           });
         }
         if (typeof window.electronAPI.onUndoDraw === "function") {
@@ -204,7 +230,7 @@
         }
       }
 
-      // Keyboard Undo (Ctrl+Z) — forwarded events include keyboard too
+      // Keyboard Undo (Ctrl+Z)
       window.addEventListener("keydown", (e) => {
         if ((e.ctrlKey || e.metaKey) && e.key === "z") {
           e.preventDefault();
