@@ -10,6 +10,7 @@ window.global = window;
   const consoleToggle = document.getElementById("console-toggle");
   const consoleChevron = document.getElementById("console-chevron");
   const monitorSelect = document.getElementById("monitor-select");
+  const desktopAudioToggle = document.getElementById("desktop-audio-toggle");
 
   // ── Window controls (frameless title bar) ───────────────────────────────────
   document.getElementById("btn-minimize")?.addEventListener("click", () => {
@@ -252,6 +253,15 @@ window.global = window;
     }
   });
 
+  desktopAudioToggle?.addEventListener("change", () => {
+    applyDesktopAudioSetting(desktopAudioToggle.checked);
+  });
+
+  initializeDesktopAudioToggle().catch(() => {
+    // Keep default checkbox state if persisted value cannot be loaded.
+    if (desktopAudioToggle) applyDesktopAudioSetting(desktopAudioToggle.checked);
+  });
+
   window.addEventListener("focus", () => {
     populateMonitorSelector().catch(() => {});
   });
@@ -263,4 +273,22 @@ window.global = window;
     setStatus(error.message, "error");
     appendLog("Initialization failed", error.stack || error.message);
   });
+
+  function applyDesktopAudioSetting(enabled) {
+    const isEnabled = !!enabled;
+    window.__capturedeskAudioEnabled = isEnabled;
+    window.electronAPI?.setDesktopAudio(isEnabled);
+  }
+
+  async function initializeDesktopAudioToggle() {
+    if (!desktopAudioToggle) return;
+    if (!window.electronAPI?.getDesktopAudio) {
+      applyDesktopAudioSetting(desktopAudioToggle.checked);
+      return;
+    }
+
+    const savedValue = await window.electronAPI.getDesktopAudio();
+    desktopAudioToggle.checked = !!savedValue;
+    applyDesktopAudioSetting(savedValue);
+  }
 })();

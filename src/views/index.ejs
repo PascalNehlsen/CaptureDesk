@@ -159,6 +159,16 @@
       .monitor-config label {
         font-size: 12px;
         color: var(--text-secondary);
+        cursor: pointer;
+        user-select: none;
+      }
+
+      .monitor-config input[type="checkbox"] {
+        cursor: pointer;
+        accent-color: var(--accent);
+        width: 15px;
+        height: 15px;
+        flex-shrink: 0;
       }
 
       .monitor-select {
@@ -180,7 +190,7 @@
       }
 
       .record-container {
-        position: relative; width: 100px; height: 100px; margin-top: 20px; margin-bottom: 32px;
+        position: relative; width: 60px; height: 60px; margin-top: 20px; margin-bottom: 32px;
       }
 
       .record-pulse {
@@ -200,7 +210,7 @@
       }
 
       #record-button {
-        width: 100px; height: 100px; border-radius: 50%; border: none;
+        width: 60px; height: 60px; border-radius: 50%; border: none;
         background: radial-gradient(circle at 40% 35%, #f87171, #ef4444 50%, #dc2626);
         box-shadow: 0 0 30px var(--red-glow), inset 0 2px 4px rgba(255,255,255,0.2);
         cursor: pointer; position: relative; z-index: 1;
@@ -351,6 +361,10 @@
         <div class="monitor-config">
           <label for="monitor-select">UI-Monitor</label>
           <select id="monitor-select" class="monitor-select" title="Monitor fuer Kamera und Controls"></select>
+        </div>
+        <div class="monitor-config">
+          <label for="desktop-audio-toggle">Desktop-Ton aufnehmen</label>
+          <input type="checkbox" id="desktop-audio-toggle" title="System-Audio in die Aufnahme einschliessen" />
         </div>
 
         <div class="record-container" id="record-container">

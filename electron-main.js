@@ -23,6 +23,7 @@ const CONTROLS_WIDTH_DRAWING = 920;
 function isDrawing() { return drawOverlayWindow !== null && !drawOverlayWindow.isDestroyed(); }
 let preferredUiDisplayId = null;
 let _connectorCache = null;
+let desktopAudioEnabled = false;
 
 const PRELOAD = path.join(__dirname, "preload.js");
 const BASE_PREFS = { contextIsolation: true, nodeIntegration: false, sandbox: true };
@@ -37,8 +38,10 @@ function loadUiSettings() {
     const raw = fs.readFileSync(getUiSettingsPath(), "utf8");
     const parsed = JSON.parse(raw);
     preferredUiDisplayId = normalizeDisplayId(parsed?.preferredUiDisplayId);
+    desktopAudioEnabled = !!parsed?.desktopAudioEnabled;
   } catch {
     preferredUiDisplayId = null;
+    desktopAudioEnabled = false;
   }
 }
 
@@ -46,7 +49,7 @@ function saveUiSettings() {
   try {
     fs.writeFileSync(
       getUiSettingsPath(),
-      JSON.stringify({ preferredUiDisplayId }, null, 2),
+      JSON.stringify({ preferredUiDisplayId, desktopAudioEnabled }, null, 2),
       "utf8",
     );
   } catch (error) {
@@ -116,6 +119,32 @@ function normalizeDisplayId(value) {
     return null;
   }
   return String(value);
+}
+
+function getDesktopAudioSyncScript() {
+  return `window.__capturedeskAudioEnabled = ${desktopAudioEnabled ? "true" : "false"};`;
+}
+
+function syncDesktopAudioInContents(contents) {
+  if (!contents || contents.isDestroyed()) return;
+  const syncScript = getDesktopAudioSyncScript();
+
+  try {
+    const frames = contents.mainFrame?.framesInSubtree || [];
+    for (const frame of frames) {
+      frame.executeJavaScript(syncScript).catch(() => {});
+    }
+  } catch {
+    // Ignore transient frame access errors during navigation/destruction.
+  }
+}
+
+function syncDesktopAudioEverywhere() {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) {
+      syncDesktopAudioInContents(win.webContents);
+    }
+  }
 }
 
 function getSafeDisplayArea(display) {
@@ -279,6 +308,12 @@ function getCaptureOverrideScript() {
     var DEFAULT_NATIVE_W = ${nativeW};
     var DEFAULT_NATIVE_H = ${nativeH};
     var DISPLAY_TARGETS = ${JSON.stringify(displayTargets)};
+    var DISPLAY_STREAMS = (typeof WeakSet === 'function') ? new WeakSet() : null;
+    var INITIAL_DESKTOP_AUDIO_ENABLED = ${desktopAudioEnabled ? "true" : "false"};
+
+    if (typeof window.__capturedeskAudioEnabled !== 'boolean') {
+      window.__capturedeskAudioEnabled = INITIAL_DESKTOP_AUDIO_ENABLED;
+    }
 
     function pickBestTargetForSource(srcW, srcH) {
       if (!(srcW > 0 && srcH > 0) || !Array.isArray(DISPLAY_TARGETS) || DISPLAY_TARGETS.length === 0) {
@@ -347,19 +382,124 @@ function getCaptureOverrideScript() {
     navigator.mediaDevices.getDisplayMedia = function() {
       console.warn('[CaptureDesk] getDisplayMedia intercepted');
 
-      return _origGDM.apply(navigator.mediaDevices, arguments).then(function(stream) {
-        var track = (stream.getVideoTracks() || [])[0];
-        if (!track) return stream;
+      var args = Array.prototype.slice.call(arguments);
+      var constraints = args[0];
+      var c = (constraints && typeof constraints === 'object')
+        ? JSON.parse(JSON.stringify(constraints))
+        : {};
 
-        if (typeof MediaStreamTrackProcessor === 'undefined' ||
-            typeof MediaStreamTrackGenerator === 'undefined') {
-          console.warn('[CaptureDesk] Insertable Streams unavailable');
+      if (shouldIncludeDesktopAudio()) {
+        // Preserve existing detailed constraints; only force-enable when disabled/missing.
+        if (c.audio === undefined || c.audio === false) c.audio = true;
+      } else {
+        // Hard-disable desktop audio capture when toggle is off.
+        c.audio = false;
+      }
+      args[0] = c;
+      console.warn('[CaptureDesk] getDisplayMedia audio=' + String(c.audio));
+
+      return _origGDM.apply(navigator.mediaDevices, args).then(function(stream) {
+        var track = (stream.getVideoTracks() || [])[0];
+        if (!track) {
+          rememberDisplayStream(stream);
           return stream;
         }
 
-        return buildUpscaledStream(stream, track);
+        if (typeof window.__capturedeskAudioEnabled !== 'boolean') {
+          window.__capturedeskAudioEnabled = INITIAL_DESKTOP_AUDIO_ENABLED;
+        }
+
+        var processedStream = null;
+        if (typeof MediaStreamTrackProcessor === 'undefined' ||
+            typeof MediaStreamTrackGenerator === 'undefined') {
+          console.warn('[CaptureDesk] Insertable Streams unavailable; using passthrough stream');
+          processedStream = buildPassthroughStream(stream, track);
+        } else {
+          processedStream = buildUpscaledStream(stream, track);
+        }
+        rememberDisplayStream(processedStream);
+        return processedStream;
       });
     };
+
+    function rememberDisplayStream(stream) {
+      if (!stream) return;
+      if (DISPLAY_STREAMS) {
+        try {
+          DISPLAY_STREAMS.add(stream);
+          return;
+        } catch (_) {}
+      }
+      try {
+        stream.__capturedeskDisplayStream = true;
+      } catch (_) {}
+    }
+
+    function shouldIncludeDesktopAudio() {
+      return window.__capturedeskAudioEnabled === true;
+    }
+
+    function isLikelyDisplayStream(stream) {
+      if (!stream || typeof stream.getVideoTracks !== 'function') return false;
+      var video = stream.getVideoTracks();
+      for (var i = 0; i < video.length; i++) {
+        var t = video[i];
+        try {
+          var s = t.getSettings ? t.getSettings() : {};
+          if (s && (s.displaySurface || s.logicalSurface !== undefined)) {
+            return true;
+          }
+        } catch (_) {}
+      }
+      return false;
+    }
+
+    function isKnownDisplayStream(stream) {
+      if (!stream) return false;
+      if (DISPLAY_STREAMS) {
+        try {
+          if (DISPLAY_STREAMS.has(stream)) return true;
+        } catch (_) {}
+      }
+      try {
+        if (stream.__capturedeskDisplayStream === true) return true;
+      } catch (_) {}
+      return isLikelyDisplayStream(stream);
+    }
+
+    function maybeStripAudioTracks(stream) {
+      if (shouldIncludeDesktopAudio() || !isKnownDisplayStream(stream)) {
+        return stream;
+      }
+
+      var out = new MediaStream();
+      var video = stream.getVideoTracks ? stream.getVideoTracks() : [];
+      for (var i = 0; i < video.length; i++) out.addTrack(video[i]);
+      return out;
+    }
+
+    if (typeof MediaRecorder === 'function' && !window.__capturedeskRecorderPatched) {
+      window.__capturedeskRecorderPatched = true;
+      var _OrigMediaRecorder = MediaRecorder;
+      var PatchedMediaRecorder = function(stream, options) {
+        var safeStream = maybeStripAudioTracks(stream);
+        return new _OrigMediaRecorder(safeStream, options);
+      };
+      PatchedMediaRecorder.prototype = _OrigMediaRecorder.prototype;
+      try {
+        Object.setPrototypeOf(PatchedMediaRecorder, _OrigMediaRecorder);
+      } catch (_) {}
+      window.MediaRecorder = PatchedMediaRecorder;
+    }
+
+    function buildPassthroughStream(originalStream, srcTrack) {
+      var tracks = [srcTrack];
+      if (shouldIncludeDesktopAudio()) {
+        var audio = originalStream.getAudioTracks();
+        for (var i = 0; i < audio.length; i++) tracks.push(audio[i]);
+      }
+      return new MediaStream(tracks);
+    }
 
     function buildUpscaledStream(originalStream, srcTrack) {
       var initialSettings = srcTrack.getSettings ? srcTrack.getSettings() : {};
@@ -450,8 +590,10 @@ function getCaptureOverrideScript() {
       patchTrackSettings(generator);
 
       var tracks = [generator];
-      var audio  = originalStream.getAudioTracks();
-      for (var i = 0; i < audio.length; i++) tracks.push(audio[i]);
+      if (shouldIncludeDesktopAudio()) {
+        var audio = originalStream.getAudioTracks();
+        for (var i = 0; i < audio.length; i++) tracks.push(audio[i]);
+      }
 
       var finalTarget = getConfiguredTargetSize();
       if (!(window.__capturedeskTargetSize && window.__capturedeskTargetSize.width && window.__capturedeskTargetSize.height)) {
@@ -580,16 +722,20 @@ function configureLoomSession(browserSession) {
             `(display_id=${selectedSource.display_id || "n/a"}, resolved display bounds: ${JSON.stringify(selectedDisplay.bounds)}, target=${selectedW || "n/a"}x${selectedH || "n/a"})`,
           );
 
-          callback({
-            audio: false,
-            video: selectedSource,
-          });
+          const streams = { video: selectedSource };
+          // Electron loopback via setDisplayMediaRequestHandler is only supported on Windows.
+          if (desktopAudioEnabled && process.platform === "win32") {
+            streams.audio = "loopback";
+          }
+          callback(streams);
         } catch (error) {
           console.error("Failed to provide a display source for Loom recording:", error);
           callback({});
         }
       },
-      { useSystemPicker: true },
+      // On Linux, the OS/system picker can override audio intent and still attach
+      // system sound even when constraints request audio=false.
+      { useSystemPicker: process.platform === "win32" },
     );
   }
 
@@ -875,6 +1021,16 @@ ipcMain.on("window-close", () => {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close();
 });
 
+ipcMain.on("set-desktop-audio", (_, enabled) => {
+  desktopAudioEnabled = !!enabled;
+  saveUiSettings();
+  syncDesktopAudioEverywhere();
+});
+
+ipcMain.handle("get-desktop-audio", () => {
+  return !!desktopAudioEnabled;
+});
+
 ipcMain.on("recording-started", () => {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   mainWindowBounds = mainWindow.getBounds();
@@ -987,7 +1143,11 @@ app.on("web-contents-created", (_, contents) => {
           frame.executeJavaScript(captureScript).catch(() => {});
         }
       } catch { /* WebContents may already be destroyed */ }
+
+      syncDesktopAudioInContents(contents);
     });
+
+    syncDesktopAudioInContents(contents);
   }
 });
 

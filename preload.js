@@ -35,4 +35,6 @@ contextBridge.exposeInMainWorld("electronAPI", {
   getUiDisplays: () => ipcRenderer.invoke("get-ui-displays"),
   getPreferredUiDisplay: () => ipcRenderer.invoke("get-preferred-ui-display"),
   setPreferredUiDisplay: (displayId) => ipcRenderer.invoke("set-preferred-ui-display", displayId),
+  getDesktopAudio: () => ipcRenderer.invoke("get-desktop-audio"),
+  setDesktopAudio: (enabled) => ipcRenderer.send("set-desktop-audio", enabled),
 });
