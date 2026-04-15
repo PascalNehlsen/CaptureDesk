@@ -35,6 +35,8 @@
       canvas.width = window.innerWidth * dpr;
       canvas.height = window.innerHeight * dpr;
       ctx.scale(dpr, dpr);
+      const logicalW = window.innerWidth;
+      const logicalH = window.innerHeight;
 
       // ── State ──────────────────────────────────────────────────────
       let currentTool = "pen";
@@ -44,44 +46,38 @@
       let startX = 0;
       let startY = 0;
       let currentPath = [];
-      let snapshot = null;
 
       // Store completed strokes for undo
       const strokes = [];
 
       // ── Helpers ────────────────────────────────────────────────────
-      function saveSnapshot() {
-        snapshot = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      }
-
-      function restoreSnapshot() {
-        if (snapshot) ctx.putImageData(snapshot, 0, 0);
+      function applyToolStyle(context, tool, color, lw) {
+        context.lineCap = "round";
+        context.lineJoin = "round";
+        if (tool === "eraser") {
+          context.globalCompositeOperation = "destination-out";
+          context.strokeStyle = "rgba(0,0,0,1)";
+          context.lineWidth = lw * 3;
+        } else if (tool === "highlighter") {
+          context.globalCompositeOperation = "source-over";
+          context.globalAlpha = 0.35;
+          context.strokeStyle = color;
+          context.lineWidth = lw * 4;
+        } else {
+          context.globalCompositeOperation = "source-over";
+          context.strokeStyle = color;
+          context.lineWidth = lw;
+        }
       }
 
       function redrawAll() {
-        ctx.clearRect(0, 0, canvas.width / dpr, canvas.height / dpr);
+        ctx.clearRect(0, 0, logicalW, logicalH);
         strokes.forEach(drawStroke);
       }
 
       function drawStroke(stroke) {
         ctx.save();
-        ctx.lineCap = "round";
-        ctx.lineJoin = "round";
-
-        if (stroke.tool === "eraser") {
-          ctx.globalCompositeOperation = "destination-out";
-          ctx.strokeStyle = "rgba(0,0,0,1)";
-          ctx.lineWidth = stroke.lineWidth * 3;
-        } else if (stroke.tool === "highlighter") {
-          ctx.globalCompositeOperation = "source-over";
-          ctx.globalAlpha = 0.35;
-          ctx.strokeStyle = stroke.color;
-          ctx.lineWidth = stroke.lineWidth * 4;
-        } else {
-          ctx.globalCompositeOperation = "source-over";
-          ctx.strokeStyle = stroke.color;
-          ctx.lineWidth = stroke.lineWidth;
-        }
+        applyToolStyle(ctx, stroke.tool, stroke.color, stroke.lineWidth);
 
         if (stroke.tool === "pen" || stroke.tool === "highlighter" || stroke.tool === "eraser") {
           if (stroke.points.length < 2) { ctx.restore(); return; }
@@ -131,26 +127,9 @@
         startY = e.clientY;
         currentPath = [{ x: e.clientX, y: e.clientY }];
 
-        if (currentTool === "arrow" || currentTool === "rect") {
-          saveSnapshot();
-        }
-
         if (currentTool === "pen" || currentTool === "highlighter" || currentTool === "eraser") {
           ctx.save();
-          ctx.lineCap = "round";
-          ctx.lineJoin = "round";
-          if (currentTool === "eraser") {
-            ctx.globalCompositeOperation = "destination-out";
-            ctx.strokeStyle = "rgba(0,0,0,1)";
-            ctx.lineWidth = lineWidth * 3;
-          } else if (currentTool === "highlighter") {
-            ctx.globalAlpha = 0.35;
-            ctx.strokeStyle = currentColor;
-            ctx.lineWidth = lineWidth * 4;
-          } else {
-            ctx.strokeStyle = currentColor;
-            ctx.lineWidth = lineWidth;
-          }
+          applyToolStyle(ctx, currentTool, currentColor, lineWidth);
           ctx.beginPath();
           ctx.moveTo(e.clientX, e.clientY);
         }
@@ -164,10 +143,10 @@
           ctx.stroke();
           currentPath.push({ x: e.clientX, y: e.clientY });
         } else if (currentTool === "arrow") {
-          restoreSnapshot();
+          redrawAll();
           drawArrowShape(ctx, startX, startY, e.clientX, e.clientY, lineWidth, currentColor);
         } else if (currentTool === "rect") {
-          restoreSnapshot();
+          redrawAll();
           ctx.save();
           ctx.strokeStyle = currentColor;
           ctx.lineWidth = lineWidth;
@@ -190,7 +169,6 @@
         }
 
         currentPath = [];
-        snapshot = null;
 
         if (window.electronAPI?.requestRaiseOverlayUi) {
           window.electronAPI.requestRaiseOverlayUi();

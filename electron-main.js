@@ -13,16 +13,18 @@ const path = require("path");
 const { start, PORT } = require("./src/server/index.js");
 
 const LOOM_PARTITION = "persist:loom";
-let sessionConfigured = false;
 let mainWindow = null;
 let cameraWindow = null;
 let controlsWindow = null;
 let drawOverlayWindow = null;
 let mainWindowBounds = null;
-let drawingActive = false;
 const CONTROLS_WIDTH_NORMAL = 380;
 const CONTROLS_WIDTH_DRAWING = 920;
+function isDrawing() { return drawOverlayWindow !== null && !drawOverlayWindow.isDestroyed(); }
 let preferredUiDisplayId = null;
+
+const PRELOAD = path.join(__dirname, "preload.js");
+const BASE_PREFS = { contextIsolation: true, nodeIntegration: false, sandbox: true };
 const UI_SETTINGS_FILE = "ui-settings.json";
 
 function getUiSettingsPath() {
@@ -88,12 +90,7 @@ function createPopupWindowOptions() {
     width: 520,
     height: 760,
     autoHideMenuBar: true,
-    webPreferences: {
-      contextIsolation: true,
-      nodeIntegration: false,
-      partition: LOOM_PARTITION,
-      sandbox: true,
-    },
+    webPreferences: { ...BASE_PREFS, partition: LOOM_PARTITION },
   };
 }
 
@@ -257,10 +254,10 @@ function setPreferredUiDisplayId(displayId) {
 // preventing the SDK from caching the original getDisplayMedia reference.
 // ---------------------------------------------------------------------------
 
-let _captureOverrideScript;
+let _captureOverrideScript = null;
 
 function getCaptureOverrideScript() {
-  if (_captureOverrideScript !== undefined) return _captureOverrideScript;
+  if (_captureOverrideScript !== null) return _captureOverrideScript;
 
   const { width: nativeW, height: nativeH } = screen.getPrimaryDisplay().size;
   const displayTargets = screen
@@ -521,12 +518,6 @@ function pickScreenSourceForRecording(sources) {
 }
 
 function configureLoomSession(browserSession) {
-  if (sessionConfigured) {
-    return;
-  }
-
-  sessionConfigured = true;
-
   // Remove "Electron/x.x.x" from user agent so loom.com serves the browser recorder experience.
   const ua = browserSession.getUserAgent().replace(/\s*Electron\/[\d.]+/, "");
   browserSession.setUserAgent(ua);
@@ -612,12 +603,10 @@ function createWindow() {
     autoHideMenuBar: true,
     icon: path.join(__dirname, "assets/capturedesk.svg"),
     webPreferences: {
-      preload: path.join(__dirname, "preload.js"),
-      contextIsolation: true,
-      nodeIntegration: false,
+      ...BASE_PREFS,
+      preload: PRELOAD,
       allowRunningInsecureContent: false,
       partition: LOOM_PARTITION,
-      sandbox: true,
     },
   });
 
@@ -649,12 +638,7 @@ function createCameraWindow() {
     resizable: false,
     skipTaskbar: true,
     hasShadow: false,
-    webPreferences: {
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-      partition: LOOM_PARTITION,
-    },
+    webPreferences: { ...BASE_PREFS, partition: LOOM_PARTITION },
   });
 
   cameraWindow.setContentProtection(true);
@@ -682,12 +666,7 @@ function createControlsWindow() {
     resizable: false,
     skipTaskbar: true,
     hasShadow: false,
-    webPreferences: {
-      preload: path.join(__dirname, "preload.js"),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-    },
+    webPreferences: { ...BASE_PREFS, preload: PRELOAD },
   });
 
   controlsWindow.setContentProtection(true);
@@ -749,12 +728,7 @@ function createDrawOverlayWindow() {
     skipTaskbar: true,
     hasShadow: false,
     focusable: true,
-    webPreferences: {
-      preload: path.join(__dirname, "preload.js"),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-    },
+    webPreferences: { ...BASE_PREFS, preload: PRELOAD },
   });
 
   // NO content protection — drawings must appear in the recording.
@@ -770,36 +744,22 @@ function createDrawOverlayWindow() {
 
   drawOverlayWindow.on("closed", () => {
     drawOverlayWindow = null;
-    drawingActive = false;
     if (controlsWindow && !controlsWindow.isDestroyed()) {
       controlsWindow.webContents.send("draw-state-changed", false);
     }
   });
 }
 
-function closeCameraWindow() {
-  if (cameraWindow && !cameraWindow.isDestroyed()) {
-    cameraWindow.close();
+function closeWindow(win, removeListeners = false) {
+  if (win && !win.isDestroyed()) {
+    if (removeListeners) win.removeAllListeners("closed");
+    win.close();
   }
-  cameraWindow = null;
 }
 
-function closeControlsWindow() {
-  if (controlsWindow && !controlsWindow.isDestroyed()) {
-    // Remove the close listener to avoid recursive restore
-    controlsWindow.removeAllListeners("closed");
-    controlsWindow.close();
-  }
-  controlsWindow = null;
-}
-
-function closeDrawOverlayWindow() {
-  if (drawOverlayWindow && !drawOverlayWindow.isDestroyed()) {
-    drawOverlayWindow.removeAllListeners("closed");
-    drawOverlayWindow.close();
-  }
-  drawOverlayWindow = null;
-}
+function closeCameraWindow() { closeWindow(cameraWindow); cameraWindow = null; }
+function closeControlsWindow() { closeWindow(controlsWindow, true); controlsWindow = null; }
+function closeDrawOverlayWindow() { closeWindow(drawOverlayWindow, true); drawOverlayWindow = null; }
 
 function restoreMainWindow() {
   if (!mainWindow || mainWindow.isDestroyed()) return;
@@ -853,7 +813,7 @@ function repositionUiWindows() {
   }
 
   if (controlsWindow && !controlsWindow.isDestroyed()) {
-    const ctrlWidth = drawingActive ? CONTROLS_WIDTH_DRAWING : CONTROLS_WIDTH_NORMAL;
+    const ctrlWidth = isDrawing() ? CONTROLS_WIDTH_DRAWING : CONTROLS_WIDTH_NORMAL;
     controlsWindow.setBounds({
       x: dispX + Math.round((width - ctrlWidth) / 2),
       y: dispY + 20,
@@ -866,17 +826,15 @@ function repositionUiWindows() {
 }
 
 function toggleDrawOverlay() {
-  drawingActive = !drawingActive;
-  if (drawingActive) {
-    createDrawOverlayWindow();
-    resizeControlsWindow(CONTROLS_WIDTH_DRAWING);
-  } else {
+  if (isDrawing()) {
     closeDrawOverlayWindow();
     resizeControlsWindow(CONTROLS_WIDTH_NORMAL);
+  } else {
+    createDrawOverlayWindow();
+    resizeControlsWindow(CONTROLS_WIDTH_DRAWING);
   }
-  raiseOverlayUiWindows();
   if (controlsWindow && !controlsWindow.isDestroyed()) {
-    controlsWindow.webContents.send("draw-state-changed", drawingActive);
+    controlsWindow.webContents.send("draw-state-changed", isDrawing());
   }
 }
 
@@ -908,7 +866,6 @@ ipcMain.on("recording-stopped", () => {
   closeCameraWindow();
   closeControlsWindow();
   closeDrawOverlayWindow();
-  drawingActive = false;
   restoreMainWindow();
 });
 
@@ -965,23 +922,11 @@ ipcMain.on("raise-overlay-ui", () => {
 });
 
 // Forward drawing tool settings from controls window to draw overlay
-ipcMain.on("draw-tool-changed", (_, tool) => {
-  if (drawOverlayWindow && !drawOverlayWindow.isDestroyed()) {
-    drawOverlayWindow.webContents.send("draw-tool-changed", tool);
-  }
-});
-
-ipcMain.on("draw-color-changed", (_, color) => {
-  if (drawOverlayWindow && !drawOverlayWindow.isDestroyed()) {
-    drawOverlayWindow.webContents.send("draw-color-changed", color);
-  }
-});
-
-ipcMain.on("draw-size-changed", (_, size) => {
-  if (drawOverlayWindow && !drawOverlayWindow.isDestroyed()) {
-    drawOverlayWindow.webContents.send("draw-size-changed", size);
-  }
-});
+for (const channel of ["draw-tool-changed", "draw-color-changed", "draw-size-changed"]) {
+  ipcMain.on(channel, (_, value) => {
+    if (isDrawing()) drawOverlayWindow.webContents.send(channel, value);
+  });
+}
 
 // Handle window.open() calls from within Loom SDK iframes
 app.on("web-contents-created", (_, contents) => {

@@ -130,13 +130,8 @@
 
       <div class="divider"></div>
 
-      <!-- Pause/Resume toggle -->
-      <button class="ctrl-btn" id="pause-btn" title="Pausieren (Ctrl+Shift+P)">
-        <svg viewBox="0 0 24 24">
-          <rect x="5" y="4" width="4" height="16" rx="1"/>
-          <rect x="15" y="4" width="4" height="16" rx="1"/>
-        </svg>
-      </button>
+      <!-- Pause/Resume toggle (icon set by JS) -->
+      <button class="ctrl-btn" id="pause-btn" title="Pausieren (Ctrl+Shift+P)"></button>
 
       <!-- Draw toggle -->
       <button class="ctrl-btn" id="draw-btn" title="Zeichnen (Ctrl+Shift+D)">
@@ -207,13 +202,11 @@
       const pauseBtn   = document.getElementById("pause-btn");
       const recDot     = document.getElementById("rec-dot");
 
-      const PAUSE_ICON = `<svg viewBox="0 0 24 24">
-        <rect x="5" y="4" width="4" height="16" rx="1"/>
-        <rect x="15" y="4" width="4" height="16" rx="1"/>
-      </svg>`;
-      const RESUME_ICON = `<svg viewBox="0 0 24 24">
-        <path d="M8 5v14l11-7z"/>
-      </svg>`;
+      const ICONS = {
+        pause:  `<svg viewBox="0 0 24 24"><rect x="5" y="4" width="4" height="16" rx="1"/><rect x="15" y="4" width="4" height="16" rx="1"/></svg>`,
+        resume: `<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>`,
+      };
+      pauseBtn.innerHTML = ICONS.pause;
 
       function updateTimerDisplay() {
         const min = String(Math.floor(elapsed / 60)).padStart(2, "0");
@@ -236,13 +229,13 @@
       function setPauseState(paused) {
         if (paused) {
           stopTimer();
-          pauseBtn.innerHTML = RESUME_ICON;
+          pauseBtn.innerHTML = ICONS.resume;
           pauseBtn.title = "Fortsetzen (Ctrl+Shift+P)";
           pauseBtn.classList.add("active");
           recDot.classList.add("paused");
         } else {
           startTimer();
-          pauseBtn.innerHTML = PAUSE_ICON;
+          pauseBtn.innerHTML = ICONS.pause;
           pauseBtn.title = "Pausieren (Ctrl+Shift+P)";
           pauseBtn.classList.remove("active");
           recDot.classList.remove("paused");
@@ -271,27 +264,19 @@
       });
 
       // ── Drawing tools ──────────────────────────────────────────────
-      const toolBtns = document.querySelectorAll("[data-tool]");
-      toolBtns.forEach((btn) => {
-        btn.addEventListener("click", () => {
-          toolBtns.forEach((b) => b.classList.remove("active"));
-          btn.classList.add("active");
-          if (window.electronAPI?.sendDrawTool) {
-            window.electronAPI.sendDrawTool(btn.dataset.tool);
-          }
+      function makeActiveGroup(selector, send) {
+        const items = document.querySelectorAll(selector);
+        items.forEach((el) => {
+          el.addEventListener("click", () => {
+            items.forEach((i) => i.classList.remove("active"));
+            el.classList.add("active");
+            send(el.dataset.tool ?? el.dataset.color);
+          });
         });
-      });
+      }
 
-      const swatches = document.querySelectorAll("[data-color]");
-      swatches.forEach((s) => {
-        s.addEventListener("click", () => {
-          swatches.forEach((sw) => sw.classList.remove("active"));
-          s.classList.add("active");
-          if (window.electronAPI?.sendDrawColor) {
-            window.electronAPI.sendDrawColor(s.dataset.color);
-          }
-        });
-      });
+      makeActiveGroup("[data-tool]",  (t) => window.electronAPI?.sendDrawTool(t));
+      makeActiveGroup("[data-color]", (c) => window.electronAPI?.sendDrawColor(c));
 
       document.getElementById("size-slider").addEventListener("input", (e) => {
         if (window.electronAPI?.sendDrawSize) {
