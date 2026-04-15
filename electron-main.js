@@ -325,6 +325,24 @@ function getCaptureOverrideScript() {
     console.warn('[CaptureDesk] Override installed in: ' + location.href.substring(0, 120));
 
     var _origGDM = navigator.mediaDevices.getDisplayMedia.bind(navigator.mediaDevices);
+    var _origGUM = (navigator.mediaDevices.getUserMedia || null) &&
+                  navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+
+    // Intercept getUserMedia to request higher-quality audio from the microphone.
+    if (_origGUM) {
+      navigator.mediaDevices.getUserMedia = function(constraints) {
+        var c = (constraints && typeof constraints === 'object')
+          ? JSON.parse(JSON.stringify(constraints))
+          : (constraints || {});
+        if (c.audio === true) {
+          c.audio = { sampleRate: { ideal: 48000 }, channelCount: { ideal: 2 } };
+        } else if (c.audio && typeof c.audio === 'object') {
+          if (!c.audio.sampleRate)    c.audio.sampleRate    = { ideal: 48000 };
+          if (!c.audio.channelCount)  c.audio.channelCount  = { ideal: 2 };
+        }
+        return _origGUM.call(navigator.mediaDevices, c);
+      };
+    }
 
     navigator.mediaDevices.getDisplayMedia = function() {
       console.warn('[CaptureDesk] getDisplayMedia intercepted');
@@ -959,6 +977,17 @@ app.on("web-contents-created", (_, contents) => {
     } catch (err) {
       console.warn("[CaptureDesk] Debugger attach failed:", err.message);
     }
+
+    // Fallback: re-inject on every frame load in case CDP attach failed.
+    // The __capturedeskApplied guard inside the script prevents re-execution
+    // in frames that already have the override, so this is safe to leave on.
+    contents.on("did-frame-finish-load", () => {
+      try {
+        for (const frame of contents.mainFrame.framesInSubtree) {
+          frame.executeJavaScript(captureScript).catch(() => {});
+        }
+      } catch { /* WebContents may already be destroyed */ }
+    });
   }
 });
 
