@@ -20,6 +20,10 @@ let drawOverlayWindow = null;
 let mainWindowBounds = null;
 const CONTROLS_WIDTH_NORMAL = 380;
 const CONTROLS_WIDTH_DRAWING = 920;
+const CAMERA_WINDOW_SIZE = 200;
+const CONTROLS_WINDOW_HEIGHT = 60;
+const OVERLAY_UI_MARGIN = 20;
+const OVERLAY_UI_GAP = 20;
 function isDrawing() { return drawOverlayWindow !== null && !drawOverlayWindow.isDestroyed(); }
 let preferredUiDisplayId = null;
 let _connectorCache = null;
@@ -308,7 +312,6 @@ function getCaptureOverrideScript() {
     var DEFAULT_NATIVE_W = ${nativeW};
     var DEFAULT_NATIVE_H = ${nativeH};
     var DISPLAY_TARGETS = ${JSON.stringify(displayTargets)};
-    var DISPLAY_STREAMS = (typeof WeakSet === 'function') ? new WeakSet() : null;
     var INITIAL_DESKTOP_AUDIO_ENABLED = ${desktopAudioEnabled ? "true" : "false"};
 
     if (typeof window.__capturedeskAudioEnabled !== 'boolean') {
@@ -400,10 +403,7 @@ function getCaptureOverrideScript() {
 
       return _origGDM.apply(navigator.mediaDevices, args).then(function(stream) {
         var track = (stream.getVideoTracks() || [])[0];
-        if (!track) {
-          rememberDisplayStream(stream);
-          return stream;
-        }
+        if (!track) return stream;
 
         if (typeof window.__capturedeskAudioEnabled !== 'boolean') {
           window.__capturedeskAudioEnabled = INITIAL_DESKTOP_AUDIO_ENABLED;
@@ -417,79 +417,12 @@ function getCaptureOverrideScript() {
         } else {
           processedStream = buildUpscaledStream(stream, track);
         }
-        rememberDisplayStream(processedStream);
         return processedStream;
       });
     };
 
-    function rememberDisplayStream(stream) {
-      if (!stream) return;
-      if (DISPLAY_STREAMS) {
-        try {
-          DISPLAY_STREAMS.add(stream);
-          return;
-        } catch (_) {}
-      }
-      try {
-        stream.__capturedeskDisplayStream = true;
-      } catch (_) {}
-    }
-
     function shouldIncludeDesktopAudio() {
       return window.__capturedeskAudioEnabled === true;
-    }
-
-    function isLikelyDisplayStream(stream) {
-      if (!stream || typeof stream.getVideoTracks !== 'function') return false;
-      var video = stream.getVideoTracks();
-      for (var i = 0; i < video.length; i++) {
-        var t = video[i];
-        try {
-          var s = t.getSettings ? t.getSettings() : {};
-          if (s && (s.displaySurface || s.logicalSurface !== undefined)) {
-            return true;
-          }
-        } catch (_) {}
-      }
-      return false;
-    }
-
-    function isKnownDisplayStream(stream) {
-      if (!stream) return false;
-      if (DISPLAY_STREAMS) {
-        try {
-          if (DISPLAY_STREAMS.has(stream)) return true;
-        } catch (_) {}
-      }
-      try {
-        if (stream.__capturedeskDisplayStream === true) return true;
-      } catch (_) {}
-      return isLikelyDisplayStream(stream);
-    }
-
-    function maybeStripAudioTracks(stream) {
-      if (shouldIncludeDesktopAudio() || !isKnownDisplayStream(stream)) {
-        return stream;
-      }
-
-      var out = new MediaStream();
-      var video = stream.getVideoTracks ? stream.getVideoTracks() : [];
-      for (var i = 0; i < video.length; i++) out.addTrack(video[i]);
-      return out;
-    }
-
-    if (typeof MediaRecorder === 'function' && !window.__capturedeskRecorderPatched) {
-      window.__capturedeskRecorderPatched = true;
-      var _OrigMediaRecorder = MediaRecorder;
-      var PatchedMediaRecorder = function(stream, options) {
-        var safeStream = maybeStripAudioTracks(stream);
-        return new _OrigMediaRecorder(safeStream, options);
-      };
-      PatchedMediaRecorder.prototype = _OrigMediaRecorder.prototype;
-      try {
-        Object.setPrototypeOf(PatchedMediaRecorder, _OrigMediaRecorder);
-      } catch (_) {}
-      window.MediaRecorder = PatchedMediaRecorder;
     }
 
     function buildPassthroughStream(originalStream, srcTrack) {
@@ -792,13 +725,13 @@ function createWindow() {
 function createCameraWindow() {
   if (cameraWindow && !cameraWindow.isDestroyed()) return;
 
-  const { x: dispX, y: dispY, height } = getUiWorkArea();
+  const cameraBounds = getCameraWindowBounds();
 
   cameraWindow = new BrowserWindow({
-    width: 200,
-    height: 200,
-    x: dispX + 20,
-    y: dispY + height - 220,
+    width: cameraBounds.width,
+    height: cameraBounds.height,
+    x: cameraBounds.x,
+    y: cameraBounds.y,
     frame: false,
     transparent: true,
     alwaysOnTop: true,
@@ -821,14 +754,14 @@ function createCameraWindow() {
 function createControlsWindow() {
   if (controlsWindow && !controlsWindow.isDestroyed()) return;
 
-  const { x: dispX, y: dispY, width } = getUiWorkArea();
   const controlsWidth = CONTROLS_WIDTH_NORMAL;
+  const controlsBounds = getControlsWindowBounds(controlsWidth);
 
   controlsWindow = new BrowserWindow({
-    width: controlsWidth,
-    height: 60,
-    x: dispX + Math.round((width - controlsWidth) / 2),
-    y: dispY + 20,
+    width: controlsBounds.width,
+    height: controlsBounds.height,
+    x: controlsBounds.x,
+    y: controlsBounds.y,
     frame: false,
     transparent: true,
     alwaysOnTop: true,
@@ -868,6 +801,31 @@ function raiseOverlayUiWindows() {
 function getUiWorkArea() {
   const display = getResolvedUiDisplay();
   return getSafeDisplayArea(display);
+}
+
+function getCameraWindowBounds() {
+  const { x: dispX, y: dispY, width, height } = getUiWorkArea();
+  return {
+    x: dispX + OVERLAY_UI_MARGIN,
+    y: dispY + height - OVERLAY_UI_MARGIN - CONTROLS_WINDOW_HEIGHT - OVERLAY_UI_GAP - CAMERA_WINDOW_SIZE,
+    width: CAMERA_WINDOW_SIZE,
+    height: CAMERA_WINDOW_SIZE,
+  };
+}
+
+function getControlsWindowBounds(controlsWidth) {
+  const { x: dispX, width: screenW } = getUiWorkArea();
+  const cameraBounds = getCameraWindowBounds();
+  const minX = dispX + OVERLAY_UI_MARGIN;
+  const maxX = dispX + screenW - OVERLAY_UI_MARGIN - controlsWidth;
+  const centeredX = cameraBounds.x + Math.round((cameraBounds.width - controlsWidth) / 2);
+
+  return {
+    x: Math.min(Math.max(centeredX, minX), Math.max(minX, maxX)),
+    y: cameraBounds.y + cameraBounds.height + OVERLAY_UI_GAP,
+    width: controlsWidth,
+    height: CONTROLS_WINDOW_HEIGHT,
+  };
 }
 
 // Returns a bounding rect that covers every connected display so the draw
@@ -963,32 +921,20 @@ function unregisterRecordingShortcuts() {
 
 function resizeControlsWindow(width) {
   if (!controlsWindow || controlsWindow.isDestroyed()) return;
-  const bounds = controlsWindow.getBounds();
-  const { x: dispX, width: screenW } = getUiWorkArea();
-  controlsWindow.setBounds({
-    x: dispX + Math.round((screenW - width) / 2),
-    y: bounds.y,
-    width,
-    height: bounds.height,
-  });
+  controlsWindow.setBounds(getControlsWindowBounds(width));
   raiseOverlayUiWindows();
 }
 
 function repositionUiWindows() {
-  const { x: dispX, y: dispY, width, height } = getUiWorkArea();
+  const cameraBounds = getCameraWindowBounds();
 
   if (cameraWindow && !cameraWindow.isDestroyed()) {
-    cameraWindow.setBounds({ x: dispX + 20, y: dispY + height - 220, width: 200, height: 200 });
+    cameraWindow.setBounds(cameraBounds);
   }
 
   if (controlsWindow && !controlsWindow.isDestroyed()) {
     const ctrlWidth = isDrawing() ? CONTROLS_WIDTH_DRAWING : CONTROLS_WIDTH_NORMAL;
-    controlsWindow.setBounds({
-      x: dispX + Math.round((width - ctrlWidth) / 2),
-      y: dispY + 20,
-      width: ctrlWidth,
-      height: 60,
-    });
+    controlsWindow.setBounds(getControlsWindowBounds(ctrlWidth));
   }
 
   raiseOverlayUiWindows();
