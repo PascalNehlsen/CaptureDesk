@@ -35,6 +35,10 @@ contextBridge.exposeInMainWorld("electronAPI", {
   getUiDisplays: () => ipcRenderer.invoke("get-ui-displays"),
   getPreferredUiDisplay: () => ipcRenderer.invoke("get-preferred-ui-display"),
   setPreferredUiDisplay: (displayId) => ipcRenderer.invoke("set-preferred-ui-display", displayId),
+  onUiDisplaysUpdated: (callback) => ipcRenderer.on("ui-displays-updated", () => callback()),
   getDesktopAudio: () => ipcRenderer.invoke("get-desktop-audio"),
   setDesktopAudio: (enabled) => ipcRenderer.send("set-desktop-audio", enabled),
+  getCaptureQuality: () => ipcRenderer.invoke("get-capture-quality"),
+  setCaptureQuality: (value) => ipcRenderer.send("set-capture-quality", value),
+  sendUploadInProgress: (inProgress) => ipcRenderer.send("upload-in-progress", inProgress),
 });

@@ -366,6 +366,14 @@
           <label for="desktop-audio-toggle">Desktop-Ton aufnehmen</label>
           <input type="checkbox" id="desktop-audio-toggle" title="System-Audio in die Aufnahme einschliessen" />
         </div>
+        <div class="monitor-config">
+          <label for="capture-quality-select">Aufnahme-Qualität</label>
+          <select id="capture-quality-select" class="monitor-select" title="Hoeher = groessere Datei, langsamerer Upload">
+            <option value="fast">Schnell (Passthrough)</option>
+            <option value="balanced">Ausgewogen (1080p)</option>
+            <option value="quality">Qualität (nativ)</option>
+          </select>
+        </div>
 
         <div class="record-container" id="record-container">
           <div class="record-pulse"></div>
@@ -380,17 +388,6 @@
         </div>
       </div>
 
-      <div class="shortcuts">
-        <div class="shortcut">
-          <span>Stop - </span>
-          <kbd>Ctrl</kbd><span>+</span><kbd>Shift</kbd><span>+</span><kbd>S</kbd>
-        </div>
-        <div class="shortcut">
-          <span>Draw - </span>
-          <kbd>Ctrl</kbd><span>+</span><kbd>Shift</kbd><span>+</span><kbd>D</kbd>
-        </div>
-      </div>
-
       <div class="console-section">
         <button class="console-toggle" id="console-toggle">
           <span class="console-chevron" id="console-chevron">▸</span>
@@ -400,7 +397,7 @@
       </div>
     </main>
 
-    <script src="/assets/loom-sdk-browser.js"></script>
-    <script src="/assets/renderer.js"></script>
+    <script defer src="/assets/loom-sdk-browser.js"></script>
+    <script defer src="/assets/renderer.js"></script>
   </body>
 </html>

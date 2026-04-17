@@ -6,8 +6,8 @@ try {
   electronMain = require("electron");
 }
 
-const { app, BrowserWindow, desktopCapturer, globalShortcut, ipcMain, screen, session, shell } = electronMain;
-const { execSync } = require("child_process");
+const { app, BrowserWindow, desktopCapturer, dialog, globalShortcut, ipcMain, screen, session, shell } = electronMain;
+const { execFile } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const { start, PORT } = require("./src/server/index.js");
@@ -28,6 +28,16 @@ function isDrawing() { return drawOverlayWindow !== null && !drawOverlayWindow.i
 let preferredUiDisplayId = null;
 let _connectorCache = null;
 let desktopAudioEnabled = false;
+let captureQuality = "balanced";
+let uploadInProgress = false;
+let forceCloseMainWindow = false;
+
+const CAPTURE_QUALITY_VALUES = ["fast", "balanced", "quality"];
+const BALANCED_MAX_DIM = 1920;
+
+function normalizeCaptureQuality(value) {
+  return CAPTURE_QUALITY_VALUES.includes(value) ? value : "balanced";
+}
 
 const PRELOAD = path.join(__dirname, "preload.js");
 const BASE_PREFS = { contextIsolation: true, nodeIntegration: false, sandbox: true };
@@ -43,9 +53,11 @@ function loadUiSettings() {
     const parsed = JSON.parse(raw);
     preferredUiDisplayId = normalizeDisplayId(parsed?.preferredUiDisplayId);
     desktopAudioEnabled = !!parsed?.desktopAudioEnabled;
+    captureQuality = normalizeCaptureQuality(parsed?.captureQuality);
   } catch {
     preferredUiDisplayId = null;
     desktopAudioEnabled = false;
+    captureQuality = "balanced";
   }
 }
 
@@ -53,7 +65,7 @@ function saveUiSettings() {
   try {
     fs.writeFileSync(
       getUiSettingsPath(),
-      JSON.stringify({ preferredUiDisplayId, desktopAudioEnabled }, null, 2),
+      JSON.stringify({ preferredUiDisplayId, desktopAudioEnabled, captureQuality }, null, 2),
       "utf8",
     );
   } catch (error) {
@@ -129,24 +141,47 @@ function getDesktopAudioSyncScript() {
   return `window.__capturedeskAudioEnabled = ${desktopAudioEnabled ? "true" : "false"};`;
 }
 
-function syncDesktopAudioInContents(contents) {
-  if (!contents || contents.isDestroyed()) return;
-  const syncScript = getDesktopAudioSyncScript();
+function getCaptureQualitySyncScript() {
+  return `window.__capturedeskCaptureQuality = ${JSON.stringify(captureQuality)};`;
+}
 
+function syncScriptInContents(contents, script) {
+  if (!contents || contents.isDestroyed() || !script) return;
   try {
-    const frames = contents.mainFrame?.framesInSubtree || [];
-    for (const frame of frames) {
-      frame.executeJavaScript(syncScript).catch(() => {});
+    const mainFrame = contents.mainFrame;
+    if (!mainFrame) return;
+    for (const frame of mainFrame.framesInSubtree) {
+      // Capture override globals are only consumed inside Loom-origin iframes.
+      // The main frame gets the script too (our own localhost page initializes
+      // the override in case the renderer ever calls getDisplayMedia).
+      if (frame !== mainFrame && !isLoomUrl(frame.url || "")) continue;
+      frame.executeJavaScript(script).catch(() => {});
     }
   } catch {
     // Ignore transient frame access errors during navigation/destruction.
   }
 }
 
+function syncDesktopAudioInContents(contents) {
+  syncScriptInContents(contents, getDesktopAudioSyncScript());
+}
+
+function syncCaptureQualityInContents(contents) {
+  syncScriptInContents(contents, getCaptureQualitySyncScript());
+}
+
 function syncDesktopAudioEverywhere() {
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) {
       syncDesktopAudioInContents(win.webContents);
+    }
+  }
+}
+
+function syncCaptureQualityEverywhere() {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) {
+      syncCaptureQualityInContents(win.webContents);
     }
   }
 }
@@ -217,35 +252,53 @@ function getDisplayName(display, index, linuxConnectorNames) {
   return `Monitor ${index + 1}`;
 }
 
+let _connectorLoadPromise = null;
+
+function parseXrandrOutput(output) {
+  const mapping = new Map();
+  const lines = String(output || "").split("\n").map((line) => line.trim()).filter(Boolean);
+  for (const line of lines) {
+    const match = line.match(/\s(\d+)\/\d+x(\d+)\/\d+\+(-?\d+)\+(-?\d+)\s+(.+)$/);
+    if (!match) continue;
+    const width = Number(match[1]);
+    const height = Number(match[2]);
+    const x = Number(match[3]);
+    const y = Number(match[4]);
+    const connector = String(match[5] || "").trim();
+    if (!connector) continue;
+    mapping.set(`${x},${y},${width},${height}`, connector);
+  }
+  return mapping;
+}
+
+// Non-blocking: returns the cached connector map immediately (empty on first
+// call on Linux), and kicks off the async xrandr load in the background. When
+// the load resolves, `_connectorCache` is populated and subscribers are
+// notified via a "ui-displays-updated" IPC so the UI can refresh labels.
 function getLinuxConnectorNamesByBounds() {
   if (process.platform !== "linux") return new Map();
   if (_connectorCache !== null) return _connectorCache;
 
-  try {
-    const output = execSync("xrandr --listactivemonitors", {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
+  if (!_connectorLoadPromise) {
+    _connectorLoadPromise = new Promise((resolve) => {
+      execFile("xrandr", ["--listactivemonitors"], { encoding: "utf8" }, (err, stdout) => {
+        if (err) {
+          _connectorCache = new Map();
+        } else {
+          _connectorCache = parseXrandrOutput(stdout);
+        }
+        resolve(_connectorCache);
+        notifyUiDisplaysUpdated();
+      });
     });
+  }
 
-    const mapping = new Map();
-    const lines = output.split("\n").map((line) => line.trim()).filter(Boolean);
+  return new Map();
+}
 
-    for (const line of lines) {
-      const match = line.match(/\s(\d+)\/\d+x(\d+)\/\d+\+(-?\d+)\+(-?\d+)\s+(.+)$/);
-      if (!match) continue;
-      const width = Number(match[1]);
-      const height = Number(match[2]);
-      const x = Number(match[3]);
-      const y = Number(match[4]);
-      const connector = String(match[5] || "").trim();
-      if (!connector) continue;
-      mapping.set(`${x},${y},${width},${height}`, connector);
-    }
-
-    _connectorCache = mapping;
-    return _connectorCache;
-  } catch {
-    return new Map();
+function notifyUiDisplaysUpdated() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("ui-displays-updated");
   }
 }
 
@@ -313,51 +366,75 @@ function getCaptureOverrideScript() {
     var DEFAULT_NATIVE_H = ${nativeH};
     var DISPLAY_TARGETS = ${JSON.stringify(displayTargets)};
     var INITIAL_DESKTOP_AUDIO_ENABLED = ${desktopAudioEnabled ? "true" : "false"};
+    var INITIAL_CAPTURE_QUALITY = ${JSON.stringify(captureQuality)};
+    var BALANCED_MAX_DIM = ${BALANCED_MAX_DIM};
 
     if (typeof window.__capturedeskAudioEnabled !== 'boolean') {
       window.__capturedeskAudioEnabled = INITIAL_DESKTOP_AUDIO_ENABLED;
     }
+    if (typeof window.__capturedeskCaptureQuality !== 'string') {
+      window.__capturedeskCaptureQuality = INITIAL_CAPTURE_QUALITY;
+    }
+
+    function getCaptureQuality() {
+      var q = window.__capturedeskCaptureQuality;
+      return (q === 'fast' || q === 'balanced' || q === 'quality') ? q : 'balanced';
+    }
+
+    function clampToBalanced(target) {
+      var w = Number(target && target.width);
+      var h = Number(target && target.height);
+      if (!(w > 0 && h > 0)) return { width: DEFAULT_NATIVE_W, height: DEFAULT_NATIVE_H };
+      if (w <= BALANCED_MAX_DIM && h <= BALANCED_MAX_DIM) return { width: w, height: h };
+      var scale = Math.min(BALANCED_MAX_DIM / w, BALANCED_MAX_DIM / h);
+      return {
+        width: Math.max(2, Math.round(w * scale / 2) * 2),
+        height: Math.max(2, Math.round(h * scale / 2) * 2)
+      };
+    }
 
     function pickBestTargetForSource(srcW, srcH) {
+      var best;
       if (!(srcW > 0 && srcH > 0) || !Array.isArray(DISPLAY_TARGETS) || DISPLAY_TARGETS.length === 0) {
-        return { width: DEFAULT_NATIVE_W, height: DEFAULT_NATIVE_H };
-      }
+        best = { width: DEFAULT_NATIVE_W, height: DEFAULT_NATIVE_H };
+      } else {
+        var srcAspect = srcW / srcH;
+        var bestScore = Number.POSITIVE_INFINITY;
 
-      var srcAspect = srcW / srcH;
-      var best = null;
-      var bestScore = Number.POSITIVE_INFINITY;
+        for (var i = 0; i < DISPLAY_TARGETS.length; i++) {
+          var t = DISPLAY_TARGETS[i] || {};
+          var w = Number(t.width);
+          var h = Number(t.height);
+          if (!(w > 0 && h > 0)) continue;
 
-      for (var i = 0; i < DISPLAY_TARGETS.length; i++) {
-        var t = DISPLAY_TARGETS[i] || {};
-        var w = Number(t.width);
-        var h = Number(t.height);
-        if (!(w > 0 && h > 0)) continue;
+          var aspect = w / h;
+          var aspectDiff = Math.abs(aspect - srcAspect);
+          var scaleX = w / srcW;
+          var scaleY = h / srcH;
+          var scaleSkew = Math.abs(scaleX - scaleY);
 
-        var aspect = w / h;
-        var aspectDiff = Math.abs(aspect - srcAspect);
-        var scaleX = w / srcW;
-        var scaleY = h / srcH;
-        var scaleSkew = Math.abs(scaleX - scaleY);
-
-        // Strongly prefer aspect match, then prefer close proportional scale.
-        var score = (aspectDiff * 1000) + (scaleSkew * 100) + Math.abs(1 - Math.min(scaleX, scaleY));
-        if (score < bestScore) {
-          bestScore = score;
-          best = { width: Math.round(w), height: Math.round(h) };
+          // Strongly prefer aspect match, then prefer close proportional scale.
+          var score = (aspectDiff * 1000) + (scaleSkew * 100) + Math.abs(1 - Math.min(scaleX, scaleY));
+          if (score < bestScore) {
+            bestScore = score;
+            best = { width: Math.round(w), height: Math.round(h) };
+          }
         }
+
+        if (!best) best = { width: DEFAULT_NATIVE_W, height: DEFAULT_NATIVE_H };
       }
 
-      return best || { width: DEFAULT_NATIVE_W, height: DEFAULT_NATIVE_H };
+      return getCaptureQuality() === 'balanced' ? clampToBalanced(best) : best;
     }
 
     function getConfiguredTargetSize() {
       var maybeTarget = window.__capturedeskTargetSize || {};
       var w = Number(maybeTarget.width);
       var h = Number(maybeTarget.height);
-      if (w > 0 && h > 0) {
-        return { width: Math.round(w), height: Math.round(h) };
-      }
-      return { width: DEFAULT_NATIVE_W, height: DEFAULT_NATIVE_H };
+      var target = (w > 0 && h > 0)
+        ? { width: Math.round(w), height: Math.round(h) }
+        : { width: DEFAULT_NATIVE_W, height: DEFAULT_NATIVE_H };
+      return getCaptureQuality() === 'balanced' ? clampToBalanced(target) : target;
     }
 
     console.warn('[CaptureDesk] Override installed in: ' + location.href.substring(0, 120));
@@ -410,11 +487,16 @@ function getCaptureOverrideScript() {
         }
 
         var processedStream = null;
-        if (typeof MediaStreamTrackProcessor === 'undefined' ||
+        var quality = getCaptureQuality();
+        if (quality === 'fast') {
+          console.warn('[CaptureDesk] Quality=fast; using passthrough stream');
+          processedStream = buildPassthroughStream(stream, track);
+        } else if (typeof MediaStreamTrackProcessor === 'undefined' ||
             typeof MediaStreamTrackGenerator === 'undefined') {
           console.warn('[CaptureDesk] Insertable Streams unavailable; using passthrough stream');
           processedStream = buildPassthroughStream(stream, track);
         } else {
+          console.warn('[CaptureDesk] Quality=' + quality + '; using upscaled stream');
           processedStream = buildUpscaledStream(stream, track);
         }
         return processedStream;
@@ -714,8 +796,28 @@ function createWindow() {
   mainWindow.setContentProtection(true);
 
   mainWindow.loadURL(`http://localhost:${PORT}`);
+  mainWindow.on("close", (event) => {
+    if (!uploadInProgress || forceCloseMainWindow) return;
+    event.preventDefault();
+    const choice = dialog.showMessageBoxSync(mainWindow, {
+      type: "warning",
+      title: "Upload laeuft noch",
+      message: "Ein Upload wird gerade uebertragen.",
+      detail: "Wenn du jetzt schliesst, wird der Upload abgebrochen und das Video geht verloren.",
+      buttons: ["Abbrechen", "Trotzdem schliessen"],
+      defaultId: 0,
+      cancelId: 0,
+      noLink: true,
+    });
+    if (choice === 1) {
+      forceCloseMainWindow = true;
+      mainWindow.close();
+    }
+  });
   mainWindow.on("closed", () => {
     mainWindow = null;
+    uploadInProgress = false;
+    forceCloseMainWindow = false;
     closeCameraWindow();
     closeControlsWindow();
     closeDrawOverlayWindow();
@@ -889,6 +991,36 @@ function closeCameraWindow() { closeWindow(cameraWindow); cameraWindow = null; }
 function closeControlsWindow() { closeWindow(controlsWindow, true); controlsWindow = null; }
 function closeDrawOverlayWindow() { closeWindow(drawOverlayWindow, true); drawOverlayWindow = null; }
 
+function showCameraWindow() {
+  if (!cameraWindow || cameraWindow.isDestroyed()) {
+    createCameraWindow();
+    return;
+  }
+  cameraWindow.setBounds(getCameraWindowBounds());
+  cameraWindow.showInactive();
+  if (typeof cameraWindow.moveTop === "function") cameraWindow.moveTop();
+}
+
+function showControlsWindow() {
+  if (!controlsWindow || controlsWindow.isDestroyed()) {
+    createControlsWindow();
+    return;
+  }
+  const ctrlWidth = isDrawing() ? CONTROLS_WIDTH_DRAWING : CONTROLS_WIDTH_NORMAL;
+  controlsWindow.setBounds(getControlsWindowBounds(ctrlWidth));
+  controlsWindow.setAlwaysOnTop(true, "screen-saver");
+  controlsWindow.show();
+  if (typeof controlsWindow.moveTop === "function") controlsWindow.moveTop();
+}
+
+function hideCameraWindow() {
+  if (cameraWindow && !cameraWindow.isDestroyed()) cameraWindow.hide();
+}
+
+function hideControlsWindow() {
+  if (controlsWindow && !controlsWindow.isDestroyed()) controlsWindow.hide();
+}
+
 function restoreMainWindow() {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   mainWindow.show();
@@ -977,19 +1109,33 @@ ipcMain.handle("get-desktop-audio", () => {
   return !!desktopAudioEnabled;
 });
 
+ipcMain.on("set-capture-quality", (_, value) => {
+  captureQuality = normalizeCaptureQuality(value);
+  saveUiSettings();
+  syncCaptureQualityEverywhere();
+});
+
+ipcMain.handle("get-capture-quality", () => {
+  return captureQuality;
+});
+
+ipcMain.on("upload-in-progress", (_, inProgress) => {
+  uploadInProgress = !!inProgress;
+});
+
 ipcMain.on("recording-started", () => {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   mainWindowBounds = mainWindow.getBounds();
   mainWindow.hide();
-  createCameraWindow();
-  createControlsWindow();
+  showCameraWindow();
+  showControlsWindow();
   registerRecordingShortcuts();
 });
 
 ipcMain.on("recording-stopped", () => {
   unregisterRecordingShortcuts();
-  closeCameraWindow();
-  closeControlsWindow();
+  hideCameraWindow();
+  hideControlsWindow();
   closeDrawOverlayWindow();
   restoreMainWindow();
 });
@@ -1085,15 +1231,21 @@ app.on("web-contents-created", (_, contents) => {
     // in frames that already have the override, so this is safe to leave on.
     contents.on("did-frame-finish-load", () => {
       try {
-        for (const frame of contents.mainFrame.framesInSubtree) {
-          frame.executeJavaScript(captureScript).catch(() => {});
+        const mainFrame = contents.mainFrame;
+        if (mainFrame) {
+          for (const frame of mainFrame.framesInSubtree) {
+            if (frame !== mainFrame && !isLoomUrl(frame.url || "")) continue;
+            frame.executeJavaScript(captureScript).catch(() => {});
+          }
         }
       } catch { /* WebContents may already be destroyed */ }
 
       syncDesktopAudioInContents(contents);
+      syncCaptureQualityInContents(contents);
     });
 
     syncDesktopAudioInContents(contents);
+    syncCaptureQualityInContents(contents);
   }
 });
 
@@ -1101,7 +1253,7 @@ app.whenReady().then(() => {
   loadUiSettings();
 
   // Invalidate xrandr connector cache when display topology changes
-  const clearConnectorCache = () => { _connectorCache = null; };
+  const clearConnectorCache = () => { _connectorCache = null; _connectorLoadPromise = null; };
   screen.on("display-added", clearConnectorCache);
   screen.on("display-removed", clearConnectorCache);
   screen.on("display-metrics-changed", clearConnectorCache);
@@ -1113,6 +1265,26 @@ app.whenReady().then(() => {
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
+});
+
+app.on("before-quit", (event) => {
+  if (!uploadInProgress || forceCloseMainWindow) return;
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  event.preventDefault();
+  const choice = dialog.showMessageBoxSync(mainWindow, {
+    type: "warning",
+    title: "Upload laeuft noch",
+    message: "Ein Upload wird gerade uebertragen.",
+    detail: "Wenn du jetzt beendest, wird der Upload abgebrochen und das Video geht verloren.",
+    buttons: ["Abbrechen", "Trotzdem beenden"],
+    defaultId: 0,
+    cancelId: 0,
+    noLink: true,
+  });
+  if (choice === 1) {
+    forceCloseMainWindow = true;
+    app.quit();
+  }
 });
 
 app.on("window-all-closed", () => {

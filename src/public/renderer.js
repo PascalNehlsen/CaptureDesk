@@ -11,6 +11,7 @@ window.global = window;
   const consoleChevron = document.getElementById("console-chevron");
   const monitorSelect = document.getElementById("monitor-select");
   const desktopAudioToggle = document.getElementById("desktop-audio-toggle");
+  const captureQualitySelect = document.getElementById("capture-quality-select");
 
   // ── Window controls (frameless title bar) ───────────────────────────────────
   document.getElementById("btn-minimize")?.addEventListener("click", () => {
@@ -110,6 +111,11 @@ window.global = window;
     return response.json();
   }
 
+  // Kick off the credentials request immediately so it runs in parallel with
+  // SDK parsing / UI initialisation — `initializeLoom` awaits it when ready.
+  const loomConfigPromise = fetchLoomConfig();
+  loomConfigPromise.catch(() => {}); // prevent unhandledrejection before init consumes it
+
   async function initializeLoom() {
     const sdk = window.loomSdk;
     const isSupported =
@@ -127,7 +133,7 @@ window.global = window;
     }
 
     setStatus("Fetching credentials…", "loading");
-    const { appId, environment } = await fetchLoomConfig();
+    const { appId, environment } = await loomConfigPromise;
     if (!appId) {
       throw new Error("Missing Loom app ID from backend.");
     }
@@ -154,11 +160,29 @@ window.global = window;
       },
     });
 
+    let uploadInProgress = false;
+    let uploadStartTs = 0;
+    const setUploadInProgress = (value, video) => {
+      const next = !!value;
+      if (next === uploadInProgress) return;
+      uploadInProgress = next;
+      if (next) {
+        uploadStartTs = Date.now();
+        appendLog(`[upload] started at ${new Date(uploadStartTs).toISOString()} for video`, video?.id || "?");
+      } else {
+        const ms = uploadStartTs ? Date.now() - uploadStartTs : 0;
+        appendLog(`[upload] ended after ${(ms / 1000).toFixed(1)}s for video`, video?.id || "?");
+        uploadStartTs = 0;
+      }
+      window.electronAPI?.sendUploadInProgress?.(next);
+    };
+
     const sdkButton = configureButton({
       element: recordButton,
       hooks: {
         onCancel: () => {
           setStatus("Recording cancelled.", "ready");
+          setUploadInProgress(false);
           if (window.electronAPI) window.electronAPI.sendRecordingStopped();
         },
         onComplete: () => {
@@ -171,6 +195,7 @@ window.global = window;
         },
         onRecordingComplete: (video) => {
           appendLog("Recording complete", video);
+          setUploadInProgress(true, video);
           if (window.electronAPI) window.electronAPI.sendRecordingStopped();
         },
         onRecordingStarted: () => {
@@ -180,6 +205,7 @@ window.global = window;
         onUploadComplete: (video) => {
           setStatus("Upload complete.", "ready");
           appendLog("Upload complete", video);
+          setUploadInProgress(false, video);
         },
       },
     });
@@ -262,9 +288,23 @@ window.global = window;
     if (desktopAudioToggle) applyDesktopAudioSetting(desktopAudioToggle.checked);
   });
 
+  captureQualitySelect?.addEventListener("change", () => {
+    applyCaptureQualitySetting(captureQualitySelect.value);
+  });
+
+  initializeCaptureQualitySelect().catch(() => {
+    if (captureQualitySelect) applyCaptureQualitySetting(captureQualitySelect.value);
+  });
+
   window.addEventListener("focus", () => {
     populateMonitorSelector().catch(() => {});
   });
+
+  if (typeof window.electronAPI?.onUiDisplaysUpdated === "function") {
+    window.electronAPI.onUiDisplaysUpdated(() => {
+      populateMonitorSelector().catch(() => {});
+    });
+  }
 
   populateMonitorSelector().catch(() => {});
 
@@ -290,5 +330,24 @@ window.global = window;
     const savedValue = await window.electronAPI.getDesktopAudio();
     desktopAudioToggle.checked = !!savedValue;
     applyDesktopAudioSetting(savedValue);
+  }
+
+  function applyCaptureQualitySetting(value) {
+    const normalized = ["fast", "balanced", "quality"].includes(value) ? value : "balanced";
+    window.__capturedeskCaptureQuality = normalized;
+    window.electronAPI?.setCaptureQuality?.(normalized);
+  }
+
+  async function initializeCaptureQualitySelect() {
+    if (!captureQualitySelect) return;
+    if (!window.electronAPI?.getCaptureQuality) {
+      applyCaptureQualitySetting(captureQualitySelect.value);
+      return;
+    }
+
+    const savedValue = await window.electronAPI.getCaptureQuality();
+    const normalized = ["fast", "balanced", "quality"].includes(savedValue) ? savedValue : "balanced";
+    captureQualitySelect.value = normalized;
+    applyCaptureQualitySetting(normalized);
   }
 })();
