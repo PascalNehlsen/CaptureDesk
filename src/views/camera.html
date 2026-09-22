@@ -124,6 +124,25 @@
       let frameHandle = 0;
       let maskImageData = null;
 
+      // Every start/stop bumps the token so a loop that is still in flight
+      // exits instead of running alongside its replacement.
+      let loopToken = 0;
+      let lastFrameAt = 0;
+      let watchdog = 0;
+      let restartsLeft = 3;
+      let loggedFrameError = false;
+      let loggedFirstFrame = false;
+      let activeDelegate = "unknown";
+
+      // MediaPipe rejects a VIDEO-mode timestamp that does not strictly
+      // increase. Deriving it from a counter rather than passing the frame
+      // clock through removes that failure mode entirely.
+      let lastTimestamp = 0;
+
+      // If no frame lands for this long the canvas is stale, so the raw camera
+      // goes back on screen rather than showing a frozen picture.
+      const STALL_MS = 1500;
+
       async function loadSegmenter() {
         if (segmenter) return segmenter;
         if (segmenterLoading) return segmenterLoading;
@@ -133,25 +152,35 @@
             "/assets/vendor/tasks-vision/vision_bundle.mjs"
           );
           const fileset = await FilesetResolver.forVisionTasks("/assets/vendor/tasks-vision");
-          segmenter = await ImageSegmenter.createFromOptions(fileset, {
+          const options = (delegate) => ({
             baseOptions: {
               modelAssetPath: "/assets/vendor/models/selfie_segmenter.tflite",
-              delegate: "GPU",
+              delegate,
             },
             runningMode: "VIDEO",
             outputCategoryMask: true,
             outputConfidenceMasks: false,
           });
+
+          try {
+            segmenter = await ImageSegmenter.createFromOptions(fileset, options("GPU"));
+            activeDelegate = "GPU";
+          } catch (err) {
+            // The GPU delegate shares a context with the capture pipeline and
+            // can fail while a recording is running; CPU is slower but safe.
+            console.warn("[CaptureDesk] Blur GPU delegate unavailable, falling back to CPU:", err.message);
+            segmenter = await ImageSegmenter.createFromOptions(fileset, options("CPU"));
+            activeDelegate = "CPU";
+          }
           return segmenter;
         })();
 
         try {
           return await segmenterLoading;
         } catch (err) {
-          console.error("[CaptureDesk] Background blur unavailable:", err);
+          console.warn("[CaptureDesk] Background blur unavailable:", err.message || err);
           segmenterLoading = null;
-          // Fall back to the unprocessed feed rather than showing nothing.
-          document.body.classList.remove("blurred");
+          showRawCamera();
           return null;
         }
       }
@@ -190,78 +219,155 @@
         return { x: (size - drawW) / 2, y: (size - drawH) / 2, w: drawW, h: drawH };
       }
 
-      function renderBlurredFrame(now) {
+      // Returns true when a blurred frame actually made it onto the canvas.
+      function renderBlurredFrame() {
         const srcW = video.videoWidth;
         const srcH = video.videoHeight;
-        if (!segmenter || !srcW || !srcH) return;
+        if (!segmenter || !srcW || !srcH) return false;
 
-        const result = segmenter.segmentForVideo(video, now);
+        lastTimestamp = lastTimestamp + 1;
+        const result = segmenter.segmentForVideo(video, lastTimestamp);
         const mask = result?.categoryMask;
-        if (!mask) return;
+        if (!mask) return false;
 
-        const fit = coverRect(srcW, srcH, STAGE_SIZE);
+        try {
+          const fit = coverRect(srcW, srcH, STAGE_SIZE);
 
-        // 1. Blurred background across the whole bubble.
-        stageCtx.save();
-        stageCtx.filter = `blur(${BLUR_PX}px)`;
-        stageCtx.drawImage(video, fit.x, fit.y, fit.w, fit.h);
-        stageCtx.restore();
+          // 1. Blurred background across the whole bubble.
+          stageCtx.save();
+          stageCtx.filter = `blur(${BLUR_PX}px)`;
+          stageCtx.drawImage(video, fit.x, fit.y, fit.w, fit.h);
+          stageCtx.restore();
 
-        // 2. Person layer: the mask cuts the sharp frame to shape.
-        maskToAlpha(mask);
-        personCtx.clearRect(0, 0, STAGE_SIZE, STAGE_SIZE);
-        personCtx.drawImage(maskCanvas, fit.x, fit.y, fit.w, fit.h);
-        personCtx.globalCompositeOperation = "source-in";
-        personCtx.drawImage(video, fit.x, fit.y, fit.w, fit.h);
-        personCtx.globalCompositeOperation = "source-over";
+          // 2. Person layer: the mask cuts the sharp frame to shape.
+          maskToAlpha(mask);
+          personCtx.clearRect(0, 0, STAGE_SIZE, STAGE_SIZE);
+          personCtx.drawImage(maskCanvas, fit.x, fit.y, fit.w, fit.h);
+          personCtx.globalCompositeOperation = "source-in";
+          personCtx.drawImage(video, fit.x, fit.y, fit.w, fit.h);
+          personCtx.globalCompositeOperation = "source-over";
 
-        // 3. Person over background.
-        stageCtx.drawImage(personCanvas, 0, 0);
+          // 3. Person over background.
+          stageCtx.drawImage(personCanvas, 0, 0);
+        } finally {
+          mask.close();
+        }
+        return true;
+      }
 
-        mask.close();
+      function showBlurredCanvas() {
+        document.body.classList.add("blurred");
+      }
+
+      function showRawCamera() {
+        document.body.classList.remove("blurred");
       }
 
       // requestVideoFrameCallback ties the work to actual camera frames, so a
       // 30fps feed costs 30 segmentations instead of 60.
-      function scheduleFrame() {
-        if (!blurEnabled) return;
+      function scheduleFrame(token) {
+        if (!blurEnabled || token !== loopToken) return;
+
+        const step = () => {
+          if (!blurEnabled || token !== loopToken) return;
+          try {
+            if (renderBlurredFrame()) {
+              lastFrameAt = performance.now();
+              if (!loggedFirstFrame) {
+                loggedFirstFrame = true;
+                console.warn(`[CaptureDesk] Blur active (${activeDelegate} delegate)`);
+              }
+              // The canvas only takes over once it holds a real frame, so
+              // enabling blur can never swap live video for a stale picture.
+              showBlurredCanvas();
+            }
+          } catch (err) {
+            // A single bad frame must not take the loop down with it.
+            if (!loggedFrameError) {
+              loggedFrameError = true;
+              console.warn("[CaptureDesk] Blur frame failed:", err.message || err);
+            }
+          }
+          scheduleFrame(token);
+        };
+
         if (typeof video.requestVideoFrameCallback === "function") {
-          frameHandle = video.requestVideoFrameCallback((now) => {
-            renderBlurredFrame(now);
-            scheduleFrame();
-          });
+          frameHandle = video.requestVideoFrameCallback(step);
         } else {
-          frameHandle = requestAnimationFrame((now) => {
-            renderBlurredFrame(now);
-            scheduleFrame();
-          });
+          frameHandle = requestAnimationFrame(step);
         }
+      }
+
+      function startWatchdog() {
+        if (watchdog) return;
+        watchdog = setInterval(() => {
+          if (!blurEnabled || !lastFrameAt) return;
+          if (performance.now() - lastFrameAt <= STALL_MS) return;
+
+          showRawCamera();
+          if (restartsLeft > 0) {
+            restartsLeft--;
+            console.warn("[CaptureDesk] Blur stalled; restarting the loop");
+            lastFrameAt = 0;
+            loopToken++;
+            scheduleFrame(loopToken);
+          } else {
+            console.warn("[CaptureDesk] Blur kept stalling; staying on the raw camera");
+            blurEnabled = false;
+          }
+        }, 500);
+      }
+
+      function stopWatchdog() {
+        if (!watchdog) return;
+        clearInterval(watchdog);
+        watchdog = 0;
       }
 
       async function startBlurLoop() {
-        if (!blurEnabled || frameHandle) return;
+        if (!blurEnabled) return;
+        // Only start once there is something to segment; startCamera() calls
+        // back in here as soon as the stream lands.
+        if (!stream) return;
+
         const ready = await loadSegmenter();
         if (!ready || !blurEnabled) return;
-        scheduleFrame();
+
+        loopToken++;
+        lastFrameAt = performance.now();
+        startWatchdog();
+        scheduleFrame(loopToken);
       }
 
       function stopBlurLoop() {
-        if (!frameHandle) return;
-        if (typeof video.cancelVideoFrameCallback === "function") {
-          video.cancelVideoFrameCallback(frameHandle);
-        } else {
-          cancelAnimationFrame(frameHandle);
+        loopToken++;
+        stopWatchdog();
+        // Whatever is on the canvas is now stale, so the live feed goes back
+        // on screen until a fresh blurred frame replaces it.
+        showRawCamera();
+        if (frameHandle) {
+          if (typeof video.cancelVideoFrameCallback === "function") {
+            video.cancelVideoFrameCallback(frameHandle);
+          } else {
+            cancelAnimationFrame(frameHandle);
+          }
+          frameHandle = 0;
         }
-        frameHandle = 0;
+        lastFrameAt = 0;
       }
 
       function setBlurEnabled(enabled) {
-        blurEnabled = !!enabled;
-        document.body.classList.toggle("blurred", blurEnabled);
+        const next = !!enabled;
+        if (next === blurEnabled) return;
+        blurEnabled = next;
+
         if (blurEnabled) {
+          restartsLeft = 3;
+          loggedFrameError = false;
           startBlurLoop();
         } else {
           stopBlurLoop();
+          showRawCamera();
           stageCtx.clearRect(0, 0, STAGE_SIZE, STAGE_SIZE);
         }
       }
