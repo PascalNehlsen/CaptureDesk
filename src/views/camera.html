@@ -13,8 +13,14 @@
         height: 200px;
         overflow: hidden;
         background: transparent;
-        -webkit-app-region: drag;
-        cursor: move;
+        /* Dragging is driven manually from the main process — see the script
+           below — so the OS drag region must stay off. */
+        -webkit-app-region: no-drag;
+        cursor: grab;
+        user-select: none;
+      }
+      body.dragging {
+        cursor: grabbing;
       }
       video {
         width: 200px;
@@ -26,17 +32,116 @@
       }
     </style>
   </head>
-  <body>
+  <body title="Ziehen zum Verschieben · Doppelklick setzt zurück">
     <video id="cam" autoplay muted playsinline></video>
     <script>
-      navigator.mediaDevices
-        .getUserMedia({ video: true, audio: false })
-        .then((stream) => {
-          document.getElementById("cam").srcObject = stream;
-        })
-        .catch((err) => {
-          console.error("Camera error:", err);
-        });
+      const api = window.electronAPI;
+
+      // ── Device lifecycle ──────────────────────────────────────────
+      // The window is only hidden between recordings, so the stream has to be
+      // released explicitly — otherwise the camera (and its LED) stays on for
+      // the whole session. `wanted` guards the case where a suspend arrives
+      // while getUserMedia is still pending.
+      const video = document.getElementById("cam");
+      let stream = null;
+      let pending = null;
+      let wanted = false;
+
+      function releaseStream(target) {
+        for (const track of target.getTracks()) track.stop();
+      }
+
+      function startCamera() {
+        wanted = true;
+        if (stream || pending) return;
+        pending = navigator.mediaDevices
+          .getUserMedia({ video: true, audio: false })
+          .then((next) => {
+            if (!wanted) {
+              releaseStream(next);
+              return;
+            }
+            stream = next;
+            video.srcObject = next;
+          })
+          .catch((err) => {
+            console.error("Camera error:", err);
+          })
+          .finally(() => {
+            pending = null;
+          });
+      }
+
+      function stopCamera() {
+        wanted = false;
+        if (!stream) return;
+        releaseStream(stream);
+        stream = null;
+        video.srcObject = null;
+      }
+
+      startCamera();
+      api?.onCameraSuspend?.(stopCamera);
+      api?.onCameraResume?.(startCamera);
+
+      // ── Dragging ──────────────────────────────────────────────────
+      // `-webkit-app-region: drag` is unreliable for transparent, toolbar-type
+      // windows on X11, so the position is applied in the main process from
+      // screen-space pointer deltas. `screenX/screenY` are cursor coordinates
+      // and therefore unaffected by the window moving underneath; pointer
+      // capture keeps events flowing when the cursor outruns the 200px window.
+      // Moves are coalesced to one IPC message per frame.
+      let dragStart = null;
+      let pendingDelta = null;
+      let rafId = 0;
+
+      function flushDelta() {
+        rafId = 0;
+        if (!pendingDelta) return;
+        api?.sendCameraDragMove?.(pendingDelta);
+        pendingDelta = null;
+      }
+
+      document.body.addEventListener("pointerdown", (event) => {
+        if (event.button !== 0) return;
+        dragStart = { x: event.screenX, y: event.screenY };
+        pendingDelta = null;
+        document.body.classList.add("dragging");
+        try {
+          document.body.setPointerCapture(event.pointerId);
+        } catch {
+          // Pointer capture is best-effort; dragging still works without it.
+        }
+        api?.sendCameraDragStart?.();
+      });
+
+      document.body.addEventListener("pointermove", (event) => {
+        if (!dragStart) return;
+        pendingDelta = { dx: event.screenX - dragStart.x, dy: event.screenY - dragStart.y };
+        if (!rafId) rafId = requestAnimationFrame(flushDelta);
+      });
+
+      function endDrag() {
+        if (!dragStart) return;
+        dragStart = null;
+        document.body.classList.remove("dragging");
+        if (rafId) {
+          cancelAnimationFrame(rafId);
+          rafId = 0;
+        }
+        flushDelta();
+        api?.sendCameraDragEnd?.();
+      }
+
+      document.body.addEventListener("pointerup", endDrag);
+      document.body.addEventListener("pointercancel", endDrag);
+      window.addEventListener("blur", endDrag);
+
+      // Double-click restores the default spot above the controls bar.
+      document.body.addEventListener("dblclick", () => {
+        endDrag();
+        api?.resetCameraPosition?.();
+      });
     </script>
   </body>
 </html>

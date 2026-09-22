@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   onPauseRecording: (callback) => ipcRenderer.on("pause-recording", () => callback()),
   sendRecordingPauseState: (isPaused) => ipcRenderer.send("recording-pause-state-changed", isPaused),
   onRecordingPauseStateChanged: (callback) => ipcRenderer.on("recording-pause-state-changed", (_, isPaused) => callback(isPaused)),
+  onResetRecordingTimer: (callback) => ipcRenderer.on("reset-recording-timer", () => callback()),
 
   // Drawing overlay — lifecycle
   requestToggleDraw: () => ipcRenderer.send("request-toggle-draw"),
@@ -41,4 +42,14 @@ contextBridge.exposeInMainWorld("electronAPI", {
   getCaptureQuality: () => ipcRenderer.invoke("get-capture-quality"),
   setCaptureQuality: (value) => ipcRenderer.send("set-capture-quality", value),
   sendUploadInProgress: (inProgress) => ipcRenderer.send("upload-in-progress", inProgress),
+
+  // Camera bubble — device lifecycle
+  onCameraSuspend: (callback) => ipcRenderer.on("camera-suspend", () => callback()),
+  onCameraResume: (callback) => ipcRenderer.on("camera-resume", () => callback()),
+
+  // Camera bubble dragging
+  sendCameraDragStart: () => ipcRenderer.send("camera-drag-start"),
+  sendCameraDragMove: (delta) => ipcRenderer.send("camera-drag-move", delta),
+  sendCameraDragEnd: () => ipcRenderer.send("camera-drag-end"),
+  resetCameraPosition: () => ipcRenderer.send("camera-reset-position"),
 });

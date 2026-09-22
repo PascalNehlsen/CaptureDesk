@@ -193,7 +193,11 @@
 
     <script>
       // ── Timer ──────────────────────────────────────────────────────
-      let elapsed = 0;
+      // Derived from the clock rather than counted in ticks: incrementing a
+      // counter per interval drifts, and a throttled or delayed tick would
+      // lose time outright. Pauses are accumulated as completed segments.
+      let accumulatedMs = 0;
+      let segmentStart = null;
       let timerInterval = null;
       const timerEl    = document.getElementById("timer");
       const drawBtn    = document.getElementById("draw-btn");
@@ -208,15 +212,26 @@
       };
       pauseBtn.innerHTML = ICONS.pause;
 
+      function elapsedMs() {
+        const current = segmentStart === null ? 0 : performance.now() - segmentStart;
+        return accumulatedMs + current;
+      }
+
       function updateTimerDisplay() {
-        const min = String(Math.floor(elapsed / 60)).padStart(2, "0");
-        const sec = String(elapsed % 60).padStart(2, "0");
+        const total = Math.floor(elapsedMs() / 1000);
+        const min = String(Math.floor(total / 60)).padStart(2, "0");
+        const sec = String(total % 60).padStart(2, "0");
         timerEl.textContent = min + ":" + sec;
       }
 
       function startTimer() {
-        if (timerInterval) return;
-        timerInterval = setInterval(() => { elapsed++; updateTimerDisplay(); }, 1000);
+        if (segmentStart !== null) return;
+        segmentStart = performance.now();
+        updateTimerDisplay();
+        // Ticking faster than the display resolution keeps the shown second
+        // from lagging when a tick fires late; the value itself comes from the
+        // clock, so the extra ticks cost nothing but a repaint check.
+        timerInterval = setInterval(updateTimerDisplay, 250);
       }
 
       function stopTimer() {
@@ -224,6 +239,19 @@
           clearInterval(timerInterval);
           timerInterval = null;
         }
+        if (segmentStart !== null) {
+          accumulatedMs += performance.now() - segmentStart;
+          segmentStart = null;
+        }
+        updateTimerDisplay();
+      }
+
+      // The controls window is reused between recordings, so a new session has
+      // to clear the previous session's time.
+      function resetTimer() {
+        stopTimer();
+        accumulatedMs = 0;
+        startTimer();
       }
 
       function setPauseState(paused) {
@@ -302,6 +330,9 @@
               ? "Zeichnen beenden (Ctrl+Shift+D)"
               : "Zeichnen (Ctrl+Shift+D)";
           });
+        }
+        if (typeof window.electronAPI.onResetRecordingTimer === "function") {
+          window.electronAPI.onResetRecordingTimer(resetTimer);
         }
         if (typeof window.electronAPI.onRecordingPauseStateChanged === "function") {
           window.electronAPI.onRecordingPauseStateChanged((paused) => {

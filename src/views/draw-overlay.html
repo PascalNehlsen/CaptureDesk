@@ -30,16 +30,21 @@
       const canvas = document.getElementById("draw-canvas");
       const ctx = canvas.getContext("2d");
 
-      // High-DPI support
-      const dpr = window.devicePixelRatio || 1;
-      canvas.width = window.innerWidth * dpr;
-      canvas.height = window.innerHeight * dpr;
-      ctx.scale(dpr, dpr);
+      // This overlay spans the whole virtual desktop, so one canvas has to
+      // serve every monitor. window.devicePixelRatio only reports the scale of
+      // the display the window opened on, so the main process passes the
+      // highest scale factor across all displays — strokes then stay crisp on
+      // a HiDPI monitor instead of being upscaled from the lowest one.
+      const params = new URLSearchParams(location.search);
+      const dpr = Math.max(Number(params.get("dpr")) || 0, window.devicePixelRatio || 1, 1);
       const logicalW = window.innerWidth;
       const logicalH = window.innerHeight;
 
+      canvas.width = Math.round(logicalW * dpr);
+      canvas.height = Math.round(logicalH * dpr);
+      ctx.scale(dpr, dpr);
+
       // Offscreen canvas: permanent layer of all completed strokes.
-      // Arrow/rect preview blits this in O(1) instead of replaying stroke history.
       const bgCanvas = new OffscreenCanvas(canvas.width, canvas.height);
       const bgCtx = bgCanvas.getContext("2d");
       bgCtx.scale(dpr, dpr);
@@ -53,8 +58,30 @@
       let startY = 0;
       let currentPath = [];
 
+      // Points arriving since the last repaint, and the live end point for
+      // shape tools. Input can fire far more often than the display refreshes,
+      // so both are drained once per frame instead of once per event.
+      let queuedPoints = [];
+      let shapeEnd = null;
+      let rafId = 0;
+
       // Store completed strokes for undo
       const strokes = [];
+
+      const FREEHAND_TOOLS = ["pen", "highlighter", "eraser"];
+
+      function isFreehand(tool) {
+        return FREEHAND_TOOLS.indexOf(tool) !== -1;
+      }
+
+      // The highlighter paints at 0.35 alpha, so re-stroking a path that is
+      // still growing darkens it at every overlap. It is therefore redrawn
+      // from scratch over a blit of the committed layer each frame, like the
+      // shape tools. Pen and eraser are idempotent at full alpha and can draw
+      // just the new segment, which keeps their cost per frame constant.
+      function needsFullRedraw(tool) {
+        return tool === "highlighter" || tool === "arrow" || tool === "rect";
+      }
 
       // ── Helpers ────────────────────────────────────────────────────
       function applyToolStyle(context, tool, color, lw) {
@@ -76,19 +103,30 @@
         }
       }
 
+      // bgCanvas is sized in device pixels while ctx carries the dpr
+      // transform, so the destination size has to be given in logical units.
+      function blitBackground() {
+        ctx.clearRect(0, 0, logicalW, logicalH);
+        ctx.drawImage(bgCanvas, 0, 0, logicalW, logicalH);
+      }
+
+      function strokePath(context, points) {
+        if (points.length < 2) return;
+        context.beginPath();
+        context.moveTo(points[0].x, points[0].y);
+        for (let i = 1; i < points.length; i++) {
+          context.lineTo(points[i].x, points[i].y);
+        }
+        context.stroke();
+      }
+
       // Draws a stroke to any context — used for bgCtx persistence and undo replay.
       function drawStroke(context, stroke) {
         context.save();
         applyToolStyle(context, stroke.tool, stroke.color, stroke.lineWidth);
 
-        if (stroke.tool === "pen" || stroke.tool === "highlighter" || stroke.tool === "eraser") {
-          if (stroke.points.length < 2) { context.restore(); return; }
-          context.beginPath();
-          context.moveTo(stroke.points[0].x, stroke.points[0].y);
-          for (let i = 1; i < stroke.points.length; i++) {
-            context.lineTo(stroke.points[i].x, stroke.points[i].y);
-          }
-          context.stroke();
+        if (isFreehand(stroke.tool)) {
+          strokePath(context, stroke.points);
         } else if (stroke.tool === "arrow") {
           drawArrowShape(context, stroke.x1, stroke.y1, stroke.x2, stroke.y2, stroke.lineWidth, stroke.color);
         } else if (stroke.tool === "rect") {
@@ -103,9 +141,8 @@
       // Rebuilds bgCanvas from scratch then copies to ctx. Only called on undo.
       function redrawAll() {
         bgCtx.clearRect(0, 0, logicalW, logicalH);
-        strokes.forEach(s => drawStroke(bgCtx, s));
-        ctx.clearRect(0, 0, logicalW, logicalH);
-        ctx.drawImage(bgCanvas, 0, 0);
+        strokes.forEach((s) => drawStroke(bgCtx, s));
+        blitBackground();
       }
 
       function drawArrowShape(c, x1, y1, x2, y2, lw, color) {
@@ -128,81 +165,142 @@
         c.restore();
       }
 
-      // ── Mouse events ───────────────────────────────────────────────
-      // Listen on window (not canvas) so events fire even when the canvas
-      // has no painted pixels yet — important for transparent windows on X11.
-      window.addEventListener("mousedown", (e) => {
-        isDrawing = true;
-        startX = e.clientX;
-        startY = e.clientY;
-        currentPath = [{ x: e.clientX, y: e.clientY }];
-
-        if (currentTool === "pen" || currentTool === "highlighter" || currentTool === "eraser") {
-          // Set up both contexts: ctx for display, bgCtx to stay in sync for previews
-          ctx.save();
-          bgCtx.save();
-          applyToolStyle(ctx, currentTool, currentColor, lineWidth);
-          applyToolStyle(bgCtx, currentTool, currentColor, lineWidth);
-          ctx.beginPath();
-          ctx.moveTo(e.clientX, e.clientY);
-          bgCtx.beginPath();
-          bgCtx.moveTo(e.clientX, e.clientY);
-        }
-      });
-
-      window.addEventListener("mousemove", (e) => {
+      // ── Per-frame rendering ────────────────────────────────────────
+      function renderFrame() {
+        rafId = 0;
         if (!isDrawing) return;
 
-        if (currentTool === "pen" || currentTool === "highlighter" || currentTool === "eraser") {
-          ctx.lineTo(e.clientX, e.clientY);
-          ctx.stroke();
-          bgCtx.lineTo(e.clientX, e.clientY);
-          bgCtx.stroke();
-          currentPath.push({ x: e.clientX, y: e.clientY });
-        } else if (currentTool === "arrow") {
-          // O(1) blit of completed layer, then draw live preview on top
-          ctx.clearRect(0, 0, logicalW, logicalH);
-          ctx.drawImage(bgCanvas, 0, 0);
-          drawArrowShape(ctx, startX, startY, e.clientX, e.clientY, lineWidth, currentColor);
+        if (isFreehand(currentTool)) {
+          if (queuedPoints.length === 0) return;
+          const appended = queuedPoints;
+          queuedPoints = [];
+
+          if (needsFullRedraw(currentTool)) {
+            // Highlighter: commit nothing yet, just preview the whole path.
+            for (const point of appended) currentPath.push(point);
+            blitBackground();
+            ctx.save();
+            applyToolStyle(ctx, currentTool, currentColor, lineWidth);
+            strokePath(ctx, currentPath);
+            ctx.restore();
+            return;
+          }
+
+          // Pen and eraser: stroke only the segment added since last frame,
+          // starting from the previous end point so there is no gap.
+          const segment = [currentPath[currentPath.length - 1]].concat(appended);
+          for (const point of appended) currentPath.push(point);
+
+          for (const context of [ctx, bgCtx]) {
+            context.save();
+            applyToolStyle(context, currentTool, currentColor, lineWidth);
+            strokePath(context, segment);
+            context.restore();
+          }
+          return;
+        }
+
+        if (!shapeEnd) return;
+        blitBackground();
+        if (currentTool === "arrow") {
+          drawArrowShape(ctx, startX, startY, shapeEnd.x, shapeEnd.y, lineWidth, currentColor);
         } else if (currentTool === "rect") {
-          ctx.clearRect(0, 0, logicalW, logicalH);
-          ctx.drawImage(bgCanvas, 0, 0);
           ctx.save();
           ctx.strokeStyle = currentColor;
           ctx.lineWidth = lineWidth;
-          ctx.strokeRect(startX, startY, e.clientX - startX, e.clientY - startY);
+          ctx.strokeRect(startX, startY, shapeEnd.x - startX, shapeEnd.y - startY);
           ctx.restore();
+        }
+      }
+
+      function scheduleFrame() {
+        if (!rafId) rafId = requestAnimationFrame(renderFrame);
+      }
+
+      // ── Pointer events ─────────────────────────────────────────────
+      // Listen on window (not canvas) so events fire even when the canvas
+      // has no painted pixels yet — important for transparent windows on X11.
+      window.addEventListener("pointerdown", (event) => {
+        if (event.button !== 0) return;
+        isDrawing = true;
+        startX = event.clientX;
+        startY = event.clientY;
+        currentPath = [{ x: event.clientX, y: event.clientY }];
+        queuedPoints = [];
+        shapeEnd = null;
+        try {
+          canvas.setPointerCapture(event.pointerId);
+        } catch {
+          // Best-effort; window-level listeners still cover the common case.
         }
       });
 
-      function finishStroke(e) {
+      window.addEventListener("pointermove", (event) => {
+        if (!isDrawing) return;
+
+        if (isFreehand(currentTool)) {
+          // Coalesced events carry the input samples the browser merged into
+          // this one, so a high-polling-rate mouse keeps its full precision
+          // while still costing a single repaint.
+          const coalesced = typeof event.getCoalescedEvents === "function"
+            ? event.getCoalescedEvents()
+            : [];
+          const samples = coalesced.length > 0 ? coalesced : [event];
+          for (const sample of samples) {
+            queuedPoints.push({ x: sample.clientX, y: sample.clientY });
+          }
+        } else {
+          shapeEnd = { x: event.clientX, y: event.clientY };
+        }
+
+        scheduleFrame();
+      });
+
+      function finishStroke(event) {
         if (!isDrawing) return;
         isDrawing = false;
 
-        if (currentTool === "pen" || currentTool === "highlighter" || currentTool === "eraser") {
-          ctx.restore();
-          bgCtx.restore(); // bgCtx already has the stroke from live drawing
-          strokes.push({ tool: currentTool, color: currentColor, lineWidth, points: currentPath });
-        } else if (currentTool === "arrow") {
-          const stroke = { tool: "arrow", color: currentColor, lineWidth, x1: startX, y1: startY, x2: e.clientX, y2: e.clientY };
-          strokes.push(stroke);
-          drawStroke(bgCtx, stroke); // persist to bgCanvas for future previews
-        } else if (currentTool === "rect") {
-          const stroke = { tool: "rect", color: currentColor, lineWidth, x1: startX, y1: startY, x2: e.clientX, y2: e.clientY };
-          strokes.push(stroke);
-          drawStroke(bgCtx, stroke);
+        if (rafId) {
+          cancelAnimationFrame(rafId);
+          rafId = 0;
+        }
+
+        if (isFreehand(currentTool)) {
+          for (const point of queuedPoints) currentPath.push(point);
+          queuedPoints = [];
+          if (currentPath.length >= 2) {
+            const stroke = { tool: currentTool, color: currentColor, lineWidth, points: currentPath };
+            strokes.push(stroke);
+            // Pen and eraser already drew into bgCtx incrementally; the
+            // highlighter was only ever previewed, so commit it now.
+            if (needsFullRedraw(currentTool)) drawStroke(bgCtx, stroke);
+          }
+          blitBackground();
+        } else {
+          const end = shapeEnd || { x: event ? event.clientX : startX, y: event ? event.clientY : startY };
+          if (end.x !== startX || end.y !== startY) {
+            const stroke = {
+              tool: currentTool, color: currentColor, lineWidth,
+              x1: startX, y1: startY, x2: end.x, y2: end.y,
+            };
+            strokes.push(stroke);
+            drawStroke(bgCtx, stroke);
+          }
+          blitBackground();
         }
 
         currentPath = [];
+        shapeEnd = null;
 
         if (window.electronAPI?.requestRaiseOverlayUi) {
           window.electronAPI.requestRaiseOverlayUi();
         }
       }
 
-      window.addEventListener("mouseup", finishStroke);
-      // mouseleave on window = mouse left the entire screen overlay → finish stroke
-      window.addEventListener("mouseleave", finishStroke);
+      window.addEventListener("pointerup", finishStroke);
+      window.addEventListener("pointercancel", finishStroke);
+      // The pointer left the entire desktop overlay → finish the stroke.
+      window.addEventListener("pointerleave", finishStroke);
 
       // ── IPC from controls window (via main process) ────────────────
       if (window.electronAPI) {

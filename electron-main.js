@@ -26,6 +26,11 @@ const OVERLAY_UI_MARGIN = 20;
 const OVERLAY_UI_GAP = 20;
 function isDrawing() { return drawOverlayWindow !== null && !drawOverlayWindow.isDestroyed(); }
 let preferredUiDisplayId = null;
+// Camera position as an offset from the UI display's work-area origin, so the
+// bubble keeps its relative spot when the user switches the UI monitor.
+// null = use the default (bottom-left, above the controls bar).
+let cameraOffset = null;
+let cameraDragOrigin = null;
 let _connectorCache = null;
 let desktopAudioEnabled = false;
 let captureQuality = "balanced";
@@ -37,6 +42,13 @@ const BALANCED_MAX_DIM = 1920;
 
 function normalizeCaptureQuality(value) {
   return CAPTURE_QUALITY_VALUES.includes(value) ? value : "balanced";
+}
+
+function normalizeCameraOffset(value) {
+  const x = Number(value?.x);
+  const y = Number(value?.y);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+  return { x: Math.round(x), y: Math.round(y) };
 }
 
 const PRELOAD = path.join(__dirname, "preload.js");
@@ -54,10 +66,12 @@ function loadUiSettings() {
     preferredUiDisplayId = normalizeDisplayId(parsed?.preferredUiDisplayId);
     desktopAudioEnabled = !!parsed?.desktopAudioEnabled;
     captureQuality = normalizeCaptureQuality(parsed?.captureQuality);
+    cameraOffset = normalizeCameraOffset(parsed?.cameraOffset);
   } catch {
     preferredUiDisplayId = null;
     desktopAudioEnabled = false;
     captureQuality = "balanced";
+    cameraOffset = null;
   }
 }
 
@@ -65,7 +79,7 @@ function saveUiSettings() {
   try {
     fs.writeFileSync(
       getUiSettingsPath(),
-      JSON.stringify({ preferredUiDisplayId, desktopAudioEnabled, captureQuality }, null, 2),
+      JSON.stringify({ preferredUiDisplayId, desktopAudioEnabled, captureQuality, cameraOffset }, null, 2),
       "utf8",
     );
   } catch (error) {
@@ -162,26 +176,17 @@ function syncScriptInContents(contents, script) {
   }
 }
 
-function syncDesktopAudioInContents(contents) {
-  syncScriptInContents(contents, getDesktopAudioSyncScript());
+// Both globals travel in one script so a frame load costs a single
+// executeJavaScript round-trip per frame instead of one per setting.
+function getSettingsSyncScript() {
+  return `${getDesktopAudioSyncScript()}${getCaptureQualitySyncScript()}`;
 }
 
-function syncCaptureQualityInContents(contents) {
-  syncScriptInContents(contents, getCaptureQualitySyncScript());
-}
-
-function syncDesktopAudioEverywhere() {
+function syncSettingsEverywhere() {
+  const script = getSettingsSyncScript();
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) {
-      syncDesktopAudioInContents(win.webContents);
-    }
-  }
-}
-
-function syncCaptureQualityEverywhere() {
-  for (const win of BrowserWindow.getAllWindows()) {
-    if (!win.isDestroyed()) {
-      syncCaptureQualityInContents(win.webContents);
+      syncScriptInContents(win.webContents, script);
     }
   }
 }
@@ -427,14 +432,45 @@ function getCaptureOverrideScript() {
       return getCaptureQuality() === 'balanced' ? clampToBalanced(best) : best;
     }
 
-    function getConfiguredTargetSize() {
-      var maybeTarget = window.__capturedeskTargetSize || {};
-      var w = Number(maybeTarget.width);
-      var h = Number(maybeTarget.height);
-      var target = (w > 0 && h > 0)
-        ? { width: Math.round(w), height: Math.round(h) }
-        : { width: DEFAULT_NATIVE_W, height: DEFAULT_NATIVE_H };
-      return getCaptureQuality() === 'balanced' ? clampToBalanced(target) : target;
+    function posOrZero(value) {
+      var n = Number(value);
+      return n > 0 ? n : 0;
+    }
+
+    // Single source of truth for the capture target size: an explicit
+    // __capturedeskTargetSize override wins, otherwise the best-matching
+    // display for the incoming frame size. Memoised because this is called
+    // once per frame while its inputs change approximately never.
+    var _targetMemo = null;
+
+    function computeTarget(srcW, srcH) {
+      var override = window.__capturedeskTargetSize || {};
+      var ow = posOrZero(override.width);
+      var oh = posOrZero(override.height);
+      if (ow > 0 && oh > 0) {
+        var target = { width: Math.round(ow), height: Math.round(oh) };
+        return getCaptureQuality() === 'balanced' ? clampToBalanced(target) : target;
+      }
+      return pickBestTargetForSource(srcW, srcH);
+    }
+
+    function resolveTarget(srcW, srcH) {
+      var override = window.__capturedeskTargetSize || {};
+      var quality = getCaptureQuality();
+      var ow = posOrZero(override.width);
+      var oh = posOrZero(override.height);
+      var memo = _targetMemo;
+
+      if (memo && memo.srcW === srcW && memo.srcH === srcH &&
+          memo.quality === quality && memo.ow === ow && memo.oh === oh) {
+        return memo.target;
+      }
+
+      var resolved = computeTarget(srcW, srcH);
+      _targetMemo = {
+        srcW: srcW, srcH: srcH, quality: quality, ow: ow, oh: oh, target: resolved
+      };
+      return resolved;
     }
 
     console.warn('[CaptureDesk] Override installed in: ' + location.href.substring(0, 120));
@@ -486,25 +522,63 @@ function getCaptureOverrideScript() {
           window.__capturedeskAudioEnabled = INITIAL_DESKTOP_AUDIO_ENABLED;
         }
 
-        var processedStream = null;
         var quality = getCaptureQuality();
         if (quality === 'fast') {
           console.warn('[CaptureDesk] Quality=fast; using passthrough stream');
-          processedStream = buildPassthroughStream(stream, track);
-        } else if (typeof MediaStreamTrackProcessor === 'undefined' ||
+          return buildPassthroughStream(stream, track);
+        }
+        if (typeof MediaStreamTrackProcessor === 'undefined' ||
             typeof MediaStreamTrackGenerator === 'undefined') {
           console.warn('[CaptureDesk] Insertable Streams unavailable; using passthrough stream');
-          processedStream = buildPassthroughStream(stream, track);
-        } else {
-          console.warn('[CaptureDesk] Quality=' + quality + '; using upscaled stream');
-          processedStream = buildUpscaledStream(stream, track);
+          return buildPassthroughStream(stream, track);
         }
-        return processedStream;
+
+        // The per-frame rescale is the expensive part, so first ask the source
+        // to deliver the target resolution itself. When that works the stream
+        // needs no processing at all; otherwise we fall back to the pipeline.
+        // Set window.__capturedeskTryNativeCapture = false to skip the attempt.
+        return requestNativeResolution(track).then(function(isNative) {
+          if (isNative) {
+            console.warn('[CaptureDesk] Quality=' + quality + '; source delivers target size, passthrough');
+            return buildPassthroughStream(stream, track);
+          }
+          console.warn('[CaptureDesk] Quality=' + quality + '; using upscaled stream');
+          return buildUpscaledStream(stream, track);
+        });
       });
     };
 
     function shouldIncludeDesktopAudio() {
       return window.__capturedeskAudioEnabled === true;
+    }
+
+    function settingsMatchTarget(settings, target) {
+      return posOrZero(settings && settings.width) === target.width &&
+             posOrZero(settings && settings.height) === target.height;
+    }
+
+    function requestNativeResolution(srcTrack) {
+      if (window.__capturedeskTryNativeCapture === false ||
+          typeof srcTrack.applyConstraints !== 'function' ||
+          typeof srcTrack.getSettings !== 'function') {
+        return Promise.resolve(false);
+      }
+
+      var settings = srcTrack.getSettings();
+      var target = resolveTarget(posOrZero(settings.width), posOrZero(settings.height));
+      if (settingsMatchTarget(settings, target)) return Promise.resolve(true);
+
+      // Using 'exact' so a partial match still falls through to the rescale
+      // pipeline rather than silently recording at some third resolution. A
+      // rejected applyConstraints leaves the previous settings untouched.
+      return srcTrack.applyConstraints({
+        width: { exact: target.width },
+        height: { exact: target.height }
+      }).then(function() {
+        return settingsMatchTarget(srcTrack.getSettings(), target);
+      }).catch(function() {
+        return false;
+      });
     }
 
     function buildPassthroughStream(originalStream, srcTrack) {
@@ -518,73 +592,102 @@ function getCaptureOverrideScript() {
 
     function buildUpscaledStream(originalStream, srcTrack) {
       var initialSettings = srcTrack.getSettings ? srcTrack.getSettings() : {};
-      var initialSourceW = Number(initialSettings.width) || 0;
-      var initialSourceH = Number(initialSettings.height) || 0;
-      var inferredTarget = pickBestTargetForSource(initialSourceW, initialSourceH);
-      var initialTarget = getConfiguredTargetSize();
-      if (!(window.__capturedeskTargetSize && window.__capturedeskTargetSize.width && window.__capturedeskTargetSize.height)) {
-        initialTarget = inferredTarget;
-      }
+      var initialTarget = resolveTarget(
+        posOrZero(initialSettings.width),
+        posOrZero(initialSettings.height)
+      );
+
       var canvas = new OffscreenCanvas(initialTarget.width, initialTarget.height);
-      var ctx    = canvas.getContext('2d');
+      // alpha:false drops per-frame alpha compositing and desynchronized lets
+      // the 2D backend skip a synchronisation round-trip. Screen capture is
+      // fully opaque, so neither costs anything here.
+      var ctx = canvas.getContext('2d', { alpha: false, desynchronized: true });
       var logged = false;
 
-      var processor = new MediaStreamTrackProcessor({ track: srcTrack });
+      // Letterbox geometry only changes when the source or target size
+      // changes, so the canvas only needs clearing then — a clearRect per
+      // frame is pure overhead when drawImage covers the whole surface.
+      var geom = null;
+
+      function resolveGeometry(fW, fH, targetW, targetH) {
+        if (geom && geom.fW === fW && geom.fH === fH &&
+            geom.targetW === targetW && geom.targetH === targetH) {
+          return geom;
+        }
+
+        var drawW = targetW;
+        var drawH = targetH;
+        var drawX = 0;
+        var drawY = 0;
+        var srcAspect = fW / fH;
+        var dstAspect = targetW / targetH;
+
+        if (Math.abs(srcAspect - dstAspect) > 0.001) {
+          if (srcAspect > dstAspect) {
+            drawH = Math.round(targetW / srcAspect);
+            drawY = Math.floor((targetH - drawH) / 2);
+          } else {
+            drawW = Math.round(targetH * srcAspect);
+            drawX = Math.floor((targetW - drawW) / 2);
+          }
+        }
+
+        geom = {
+          fW: fW, fH: fH, targetW: targetW, targetH: targetH,
+          drawW: drawW, drawH: drawH, drawX: drawX, drawY: drawY
+        };
+
+        // New geometry can leave stale pixels outside the draw rect.
+        if (drawW !== targetW || drawH !== targetH) {
+          ctx.clearRect(0, 0, targetW, targetH);
+        }
+        return geom;
+      }
+
+      // maxBufferSize 1 plus a writable high-water mark of 1: when a frame
+      // takes too long the source drops the next one instead of building a
+      // queue, which would trade latency and memory for frames nobody sees.
+      var processor = new MediaStreamTrackProcessor({ track: srcTrack, maxBufferSize: 1 });
       var generator = new MediaStreamTrackGenerator({ kind: 'video' });
+      var frameInit = {};
 
       var transform = new TransformStream({
         transform: function(frame, ctrl) {
           try {
-            var fW = frame.displayWidth  || frame.codedWidth;
+            var fW = frame.displayWidth || frame.codedWidth;
             var fH = frame.displayHeight || frame.codedHeight;
-            var target = getConfiguredTargetSize();
-            if (!(window.__capturedeskTargetSize && window.__capturedeskTargetSize.width && window.__capturedeskTargetSize.height)) {
-              target = pickBestTargetForSource(fW, fH);
-            }
+            var target = resolveTarget(fW, fH);
             var targetW = target.width;
             var targetH = target.height;
-
-            if (canvas.width !== targetW || canvas.height !== targetH) {
-              canvas.width = targetW;
-              canvas.height = targetH;
-            }
 
             if (fW === targetW && fH === targetH) {
               ctrl.enqueue(frame);
               return;
             }
 
-            var srcAspect = fW / fH;
-            var dstAspect = targetW / targetH;
-            var drawW = targetW;
-            var drawH = targetH;
-            var drawX = 0;
-            var drawY = 0;
-
-            if (Math.abs(srcAspect - dstAspect) > 0.001) {
-              if (srcAspect > dstAspect) {
-                drawW = targetW;
-                drawH = Math.round(targetW / srcAspect);
-                drawY = Math.floor((targetH - drawH) / 2);
-              } else {
-                drawH = targetH;
-                drawW = Math.round(targetH * srcAspect);
-                drawX = Math.floor((targetW - drawW) / 2);
-              }
+            if (canvas.width !== targetW || canvas.height !== targetH) {
+              canvas.width = targetW;
+              canvas.height = targetH;
+              geom = null; // the resize already cleared the backing store
             }
 
-            ctx.clearRect(0, 0, targetW, targetH);
-            ctx.drawImage(frame, 0, 0, fW, fH, drawX, drawY, drawW, drawH);
+            var g = resolveGeometry(fW, fH, targetW, targetH);
+            ctx.drawImage(frame, 0, 0, fW, fH, g.drawX, g.drawY, g.drawW, g.drawH);
 
-            var init = { timestamp: frame.timestamp };
-            if (frame.duration != null) init.duration = frame.duration;
-            var out = new VideoFrame(canvas, init);
+            frameInit.timestamp = frame.timestamp;
+            if (frame.duration != null) {
+              frameInit.duration = frame.duration;
+            } else {
+              delete frameInit.duration;
+            }
+
+            var out = new VideoFrame(canvas, frameInit);
             frame.close();
 
             if (!logged) {
               console.warn('[CaptureDesk] Frame 0: ' + fW + 'x' + fH +
                 ' -> ' + out.codedWidth + 'x' + out.codedHeight +
-                ' (draw ' + drawW + 'x' + drawH + ' at ' + drawX + ',' + drawY + ')');
+                ' (draw ' + g.drawW + 'x' + g.drawH + ' at ' + g.drawX + ',' + g.drawY + ')');
               logged = true;
             }
 
@@ -594,15 +697,39 @@ function getCaptureOverrideScript() {
             ctrl.enqueue(frame);
           }
         }
-      });
+      }, { highWaterMark: 1 }, { highWaterMark: 0 });
 
-      processor.readable.pipeThrough(transform).pipeTo(generator.writable).catch(function(err) {
-        if (err.message !== 'Stream closed') {
-          console.warn('[CaptureDesk] Pipeline error: ' + err.message);
-        }
-      });
+      // Without this the processor keeps pulling frames until GC gets around
+      // to it, and the desktop capture stays alive after the consumer is done
+      // with our generator track.
+      var abort = new AbortController();
+      var shuttingDown = false;
 
-      patchTrackSettings(generator);
+      function shutdown() {
+        if (shuttingDown) return;
+        shuttingDown = true;
+        abort.abort();
+        try { srcTrack.stop(); } catch (e) { /* already ended */ }
+        try {
+          if (generator.readyState === 'live') generator.stop();
+        } catch (e) { /* already ended */ }
+      }
+
+      srcTrack.addEventListener('ended', shutdown);
+
+      processor.readable
+        .pipeThrough(transform, { signal: abort.signal })
+        .pipeTo(generator.writable, { signal: abort.signal })
+        .catch(function(err) {
+          var name = err && err.name;
+          var message = (err && err.message) || '';
+          if (name !== 'AbortError' && message !== 'Stream closed') {
+            console.warn('[CaptureDesk] Pipeline error: ' + message);
+          }
+        })
+        .then(shutdown);
+
+      patchTrackSettings(generator, srcTrack);
 
       var tracks = [generator];
       if (shouldIncludeDesktopAudio()) {
@@ -610,24 +737,18 @@ function getCaptureOverrideScript() {
         for (var i = 0; i < audio.length; i++) tracks.push(audio[i]);
       }
 
-      var finalTarget = getConfiguredTargetSize();
-      if (!(window.__capturedeskTargetSize && window.__capturedeskTargetSize.width && window.__capturedeskTargetSize.height)) {
-        finalTarget = inferredTarget;
-      }
-      console.warn('[CaptureDesk] Pipeline active -> ' + finalTarget.width + 'x' + finalTarget.height);
+      console.warn('[CaptureDesk] Pipeline active -> ' + initialTarget.width + 'x' + initialTarget.height);
       return new MediaStream(tracks);
     }
 
-    function patchTrackSettings(track) {
+    // The SDK reads getSettings() to decide the recording resolution, so the
+    // generator has to report the size we actually produce, not the source's.
+    function patchTrackSettings(track, srcTrack) {
       var _orig = track.getSettings.bind(track);
       track.getSettings = function() {
         var s = _orig();
-        var target = getConfiguredTargetSize();
-        if (!(window.__capturedeskTargetSize && window.__capturedeskTargetSize.width && window.__capturedeskTargetSize.height)) {
-          var sWidth = Number(s.width) || 0;
-          var sHeight = Number(s.height) || 0;
-          target = pickBestTargetForSource(sWidth, sHeight);
-        }
+        var src = srcTrack.getSettings ? srcTrack.getSettings() : {};
+        var target = resolveTarget(posOrZero(src.width), posOrZero(src.height));
         s.width  = target.width;
         s.height = target.height;
         return s;
@@ -789,11 +910,17 @@ function createWindow() {
       preload: PRELOAD,
       allowRunningInsecureContent: false,
       partition: LOOM_PARTITION,
+      // This window is hidden for the whole recording (see "recording-started"),
+      // yet the Loom SDK records and uploads from it. Chromium throttles timers
+      // to ~1/minute and pauses rAF in hidden windows, which would stall the
+      // recorder's chunking and upload cadence.
+      backgroundThrottling: false,
     },
   });
 
   mainWindow.webContents.setWindowOpenHandler(createWindowOpenHandler());
   mainWindow.setContentProtection(true);
+  installCaptureOverride(mainWindow.webContents);
 
   mainWindow.loadURL(`http://localhost:${PORT}`);
   mainWindow.on("close", (event) => {
@@ -841,7 +968,7 @@ function createCameraWindow() {
     skipTaskbar: true,
     hasShadow: false,
     type: process.platform === "linux" ? "toolbar" : "normal",
-    webPreferences: { ...BASE_PREFS, partition: LOOM_PARTITION },
+    webPreferences: { ...BASE_PREFS, preload: PRELOAD, partition: LOOM_PARTITION },
   });
 
   cameraWindow.setContentProtection(true);
@@ -905,26 +1032,49 @@ function getUiWorkArea() {
   return getSafeDisplayArea(display);
 }
 
-function getCameraWindowBounds() {
-  const { x: dispX, y: dispY, width, height } = getUiWorkArea();
+function getDefaultCameraOffset(area) {
   return {
-    x: dispX + OVERLAY_UI_MARGIN,
-    y: dispY + height - OVERLAY_UI_MARGIN - CONTROLS_WINDOW_HEIGHT - OVERLAY_UI_GAP - CAMERA_WINDOW_SIZE,
+    x: OVERLAY_UI_MARGIN,
+    y: area.height - OVERLAY_UI_MARGIN - CONTROLS_WINDOW_HEIGHT - OVERLAY_UI_GAP - CAMERA_WINDOW_SIZE,
+  };
+}
+
+function clampCameraOffset(offset, area) {
+  return {
+    x: Math.min(Math.max(Math.round(offset.x), 0), Math.max(0, area.width - CAMERA_WINDOW_SIZE)),
+    y: Math.min(Math.max(Math.round(offset.y), 0), Math.max(0, area.height - CAMERA_WINDOW_SIZE)),
+  };
+}
+
+function getCameraWindowBounds() {
+  const area = getUiWorkArea();
+  const offset = clampCameraOffset(cameraOffset || getDefaultCameraOffset(area), area);
+  return {
+    x: area.x + offset.x,
+    y: area.y + offset.y,
     width: CAMERA_WINDOW_SIZE,
     height: CAMERA_WINDOW_SIZE,
   };
 }
 
+// The controls bar tracks the camera bubble: centred under it when there is
+// room, flipped above it when the bubble sits at the bottom edge.
 function getControlsWindowBounds(controlsWidth) {
-  const { x: dispX, width: screenW } = getUiWorkArea();
+  const area = getUiWorkArea();
   const cameraBounds = getCameraWindowBounds();
-  const minX = dispX + OVERLAY_UI_MARGIN;
-  const maxX = dispX + screenW - OVERLAY_UI_MARGIN - controlsWidth;
+  const minX = area.x + OVERLAY_UI_MARGIN;
+  const maxX = area.x + area.width - OVERLAY_UI_MARGIN - controlsWidth;
   const centeredX = cameraBounds.x + Math.round((cameraBounds.width - controlsWidth) / 2);
+
+  const minY = area.y + OVERLAY_UI_MARGIN;
+  const maxY = area.y + area.height - OVERLAY_UI_MARGIN - CONTROLS_WINDOW_HEIGHT;
+  const below = cameraBounds.y + cameraBounds.height + OVERLAY_UI_GAP;
+  const above = cameraBounds.y - OVERLAY_UI_GAP - CONTROLS_WINDOW_HEIGHT;
+  const preferredY = below <= maxY ? below : above >= minY ? above : maxY;
 
   return {
     x: Math.min(Math.max(centeredX, minX), Math.max(minX, maxX)),
-    y: cameraBounds.y + cameraBounds.height + OVERLAY_UI_GAP,
+    y: Math.min(Math.max(preferredY, minY), Math.max(minY, maxY)),
     width: controlsWidth,
     height: CONTROLS_WINDOW_HEIGHT,
   };
@@ -967,7 +1117,13 @@ function createDrawOverlayWindow() {
   drawOverlayWindow.setIgnoreMouseEvents(false);
   drawOverlayWindow.setVisibleOnAllWorkspaces(true);
   drawOverlayWindow.setAlwaysOnTop(true, "status");
-  drawOverlayWindow.loadFile(path.join(__dirname, "src", "views", "draw-overlay.html"));
+  const maxScaleFactor = Math.max(
+    1,
+    ...screen.getAllDisplays().map((d) => Number(d?.scaleFactor) || 1),
+  );
+  drawOverlayWindow.loadFile(path.join(__dirname, "src", "views", "draw-overlay.html"), {
+    query: { dpr: String(maxScaleFactor) },
+  });
   drawOverlayWindow.webContents.on("did-finish-load", () => {
     raiseOverlayUiWindows();
   });
@@ -997,6 +1153,7 @@ function showCameraWindow() {
     return;
   }
   cameraWindow.setBounds(getCameraWindowBounds());
+  cameraWindow.webContents.send("camera-resume");
   cameraWindow.showInactive();
   if (typeof cameraWindow.moveTop === "function") cameraWindow.moveTop();
 }
@@ -1009,12 +1166,17 @@ function showControlsWindow() {
   const ctrlWidth = isDrawing() ? CONTROLS_WIDTH_DRAWING : CONTROLS_WIDTH_NORMAL;
   controlsWindow.setBounds(getControlsWindowBounds(ctrlWidth));
   controlsWindow.setAlwaysOnTop(true, "screen-saver");
+  controlsWindow.webContents.send("reset-recording-timer");
   controlsWindow.show();
   if (typeof controlsWindow.moveTop === "function") controlsWindow.moveTop();
 }
 
 function hideCameraWindow() {
-  if (cameraWindow && !cameraWindow.isDestroyed()) cameraWindow.hide();
+  if (!cameraWindow || cameraWindow.isDestroyed()) return;
+  // Tell the renderer to release the device *before* hiding, so the message is
+  // handled while the window is still visible and unthrottled.
+  cameraWindow.webContents.send("camera-suspend");
+  cameraWindow.hide();
 }
 
 function hideControlsWindow() {
@@ -1102,7 +1264,7 @@ ipcMain.on("window-close", () => {
 ipcMain.on("set-desktop-audio", (_, enabled) => {
   desktopAudioEnabled = !!enabled;
   saveUiSettings();
-  syncDesktopAudioEverywhere();
+  syncSettingsEverywhere();
 });
 
 ipcMain.handle("get-desktop-audio", () => {
@@ -1112,7 +1274,7 @@ ipcMain.handle("get-desktop-audio", () => {
 ipcMain.on("set-capture-quality", (_, value) => {
   captureQuality = normalizeCaptureQuality(value);
   saveUiSettings();
-  syncCaptureQualityEverywhere();
+  syncSettingsEverywhere();
 });
 
 ipcMain.handle("get-capture-quality", () => {
@@ -1192,6 +1354,54 @@ ipcMain.on("raise-overlay-ui", () => {
   raiseOverlayUiWindows();
 });
 
+// ── Camera bubble dragging ────────────────────────────────────────────────────
+// `-webkit-app-region: drag` is unreliable for transparent, toolbar-type
+// windows on X11, so the camera window drives its own move: the renderer
+// reports screen-space pointer deltas (pointer capture keeps them coming even
+// when the cursor outruns the 200px window) and the main process applies them.
+
+function moveCameraToOffset(offset) {
+  const area = getUiWorkArea();
+  cameraOffset = clampCameraOffset(offset, area);
+
+  if (cameraWindow && !cameraWindow.isDestroyed()) {
+    cameraWindow.setPosition(area.x + cameraOffset.x, area.y + cameraOffset.y);
+  }
+  if (controlsWindow && !controlsWindow.isDestroyed()) {
+    const ctrlWidth = isDrawing() ? CONTROLS_WIDTH_DRAWING : CONTROLS_WIDTH_NORMAL;
+    const { x, y } = getControlsWindowBounds(ctrlWidth);
+    controlsWindow.setPosition(x, y);
+  }
+}
+
+ipcMain.on("camera-drag-start", () => {
+  if (!cameraWindow || cameraWindow.isDestroyed()) return;
+  const area = getUiWorkArea();
+  const bounds = cameraWindow.getBounds();
+  cameraDragOrigin = { x: bounds.x - area.x, y: bounds.y - area.y };
+});
+
+ipcMain.on("camera-drag-move", (_event, delta) => {
+  if (!cameraDragOrigin) return;
+  const dx = Number(delta?.dx) || 0;
+  const dy = Number(delta?.dy) || 0;
+  moveCameraToOffset({ x: cameraDragOrigin.x + dx, y: cameraDragOrigin.y + dy });
+});
+
+ipcMain.on("camera-drag-end", () => {
+  if (!cameraDragOrigin) return;
+  cameraDragOrigin = null;
+  saveUiSettings();
+  raiseOverlayUiWindows();
+});
+
+ipcMain.on("camera-reset-position", () => {
+  cameraDragOrigin = null;
+  cameraOffset = null;
+  saveUiSettings();
+  repositionUiWindows();
+});
+
 // Forward drawing tool settings from controls window to draw overlay
 for (const channel of ["draw-tool-changed", "draw-color-changed", "draw-size-changed"]) {
   ipcMain.on(channel, (_, value) => {
@@ -1200,6 +1410,50 @@ for (const channel of ["draw-tool-changed", "draw-color-changed", "draw-size-cha
 }
 
 // Handle window.open() calls from within Loom SDK iframes
+// The capture override is injected into our own page and into the Loom SDK's
+// iframes on every frame load.
+//
+// This used to attach a CDP debugger and register the script with
+// Page.addScriptToEvaluateOnNewDocument, on the theory that running before any
+// page script stops the SDK from caching the original getDisplayMedia. That
+// never actually worked here: the registration reports success and the script
+// never runs — at window construction it is lost when the initial target is
+// swapped for the real document, and registering it later cannot reach frames
+// that already exist. Every override in practice came from the injection
+// below, so the debugger attach was pure cost and is gone.
+//
+// Injecting after frame load is fine in practice because getDisplayMedia is
+// only called on user action, long after the override is in place.
+function installCaptureOverride(contents) {
+  if (!getCaptureOverrideScript()) return;
+
+  contents.on("did-frame-finish-load", () => {
+    injectCaptureScriptIntoFrames(contents);
+  });
+  injectCaptureScriptIntoFrames(contents);
+}
+
+function injectCaptureScriptIntoFrames(contents) {
+  if (!contents || contents.isDestroyed()) return;
+  const captureScript = getCaptureOverrideScript();
+  if (!captureScript) return;
+
+  // The override's own __capturedeskApplied guard makes a repeat injection a
+  // no-op, while the settings sync that follows it always applies the current
+  // values. Both go in one script so a frame load costs one round-trip.
+  const script = `${captureScript}${getSettingsSyncScript()}`;
+
+  try {
+    const mainFrame = contents.mainFrame;
+    if (!mainFrame) return;
+    for (const frame of mainFrame.framesInSubtree) {
+      // Only our own page and Loom-origin frames consume the override.
+      if (frame !== mainFrame && !isLoomUrl(frame.url || "")) continue;
+      frame.executeJavaScript(script).catch(() => {});
+    }
+  } catch { /* WebContents may already be destroyed */ }
+}
+
 app.on("web-contents-created", (_, contents) => {
   contents.setWindowOpenHandler((details) => {
     console.log("[sub-frame window.open]", details.url);
@@ -1214,49 +1468,31 @@ app.on("web-contents-created", (_, contents) => {
     }
   });
 
-  // Inject capture upscale override into every WebContents via CDP.
-  const captureScript = getCaptureOverrideScript();
-  if (captureScript) {
-    try {
-      contents.debugger.attach("1.3");
-      contents.debugger
-        .sendCommand("Page.addScriptToEvaluateOnNewDocument", { source: captureScript })
-        .catch((err) => console.warn("[CaptureDesk] CDP injection failed:", err.message));
-    } catch (err) {
-      console.warn("[CaptureDesk] Debugger attach failed:", err.message);
-    }
-
-    // Fallback: re-inject on every frame load in case CDP attach failed.
-    // The __capturedeskApplied guard inside the script prevents re-execution
-    // in frames that already have the override, so this is safe to leave on.
+  // `opener` is set only for window.open() popups — the windows we create
+  // ourselves have none, so this separates the two without relying on
+  // construction order. A Loom popup gets the override too; anything else
+  // (OAuth pages and the like) never captures and is left alone.
+  if (contents.opener) {
     contents.on("did-frame-finish-load", () => {
-      try {
-        const mainFrame = contents.mainFrame;
-        if (mainFrame) {
-          for (const frame of mainFrame.framesInSubtree) {
-            if (frame !== mainFrame && !isLoomUrl(frame.url || "")) continue;
-            frame.executeJavaScript(captureScript).catch(() => {});
-          }
-        }
-      } catch { /* WebContents may already be destroyed */ }
-
-      syncDesktopAudioInContents(contents);
-      syncCaptureQualityInContents(contents);
+      if (isLoomUrl(contents.getURL() || "")) injectCaptureScriptIntoFrames(contents);
     });
-
-    syncDesktopAudioInContents(contents);
-    syncCaptureQualityInContents(contents);
   }
 });
 
 app.whenReady().then(() => {
   loadUiSettings();
 
-  // Invalidate xrandr connector cache when display topology changes
-  const clearConnectorCache = () => { _connectorCache = null; _connectorLoadPromise = null; };
-  screen.on("display-added", clearConnectorCache);
-  screen.on("display-removed", clearConnectorCache);
-  screen.on("display-metrics-changed", clearConnectorCache);
+  // Invalidate display-derived caches when the topology changes. The capture
+  // override script bakes in the display sizes, so a stale copy would upscale
+  // to a monitor that is no longer connected.
+  const invalidateDisplayCaches = () => {
+    _connectorCache = null;
+    _connectorLoadPromise = null;
+    _captureOverrideScript = null;
+  };
+  screen.on("display-added", invalidateDisplayCaches);
+  screen.on("display-removed", invalidateDisplayCaches);
+  screen.on("display-metrics-changed", invalidateDisplayCaches);
 
   start(() => {
     createWindow();
