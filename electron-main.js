@@ -20,7 +20,12 @@ let drawOverlayWindow = null;
 let mainWindowBounds = null;
 const CONTROLS_WIDTH_NORMAL = 380;
 const CONTROLS_WIDTH_DRAWING = 920;
-const CAMERA_WINDOW_SIZE = 200;
+const CAMERA_SIZE_DEFAULT = 200;
+const CAMERA_SIZE_MIN = 120;
+const CAMERA_SIZE_MAX = 360;
+// The scroll step is coarse enough that one notch is visible but it still
+// takes a deliberate gesture to cross a preset.
+const CAMERA_SIZE_STEP = 10;
 const CONTROLS_WINDOW_HEIGHT = 60;
 const OVERLAY_UI_MARGIN = 20;
 const OVERLAY_UI_GAP = 20;
@@ -31,6 +36,8 @@ let preferredUiDisplayId = null;
 // null = use the default (bottom-left, above the controls bar).
 let cameraOffset = null;
 let cameraDragOrigin = null;
+let cameraSize = CAMERA_SIZE_DEFAULT;
+let backgroundBlurEnabled = false;
 let _connectorCache = null;
 let desktopAudioEnabled = false;
 let captureQuality = "balanced";
@@ -42,6 +49,12 @@ const BALANCED_MAX_DIM = 1920;
 
 function normalizeCaptureQuality(value) {
   return CAPTURE_QUALITY_VALUES.includes(value) ? value : "balanced";
+}
+
+function normalizeCameraSize(value) {
+  const n = Math.round(Number(value));
+  if (!Number.isFinite(n)) return CAMERA_SIZE_DEFAULT;
+  return Math.min(Math.max(n, CAMERA_SIZE_MIN), CAMERA_SIZE_MAX);
 }
 
 function normalizeCameraOffset(value) {
@@ -67,11 +80,15 @@ function loadUiSettings() {
     desktopAudioEnabled = !!parsed?.desktopAudioEnabled;
     captureQuality = normalizeCaptureQuality(parsed?.captureQuality);
     cameraOffset = normalizeCameraOffset(parsed?.cameraOffset);
+    cameraSize = normalizeCameraSize(parsed?.cameraSize);
+    backgroundBlurEnabled = !!parsed?.backgroundBlurEnabled;
   } catch {
     preferredUiDisplayId = null;
     desktopAudioEnabled = false;
     captureQuality = "balanced";
     cameraOffset = null;
+    cameraSize = CAMERA_SIZE_DEFAULT;
+    backgroundBlurEnabled = false;
   }
 }
 
@@ -79,7 +96,18 @@ function saveUiSettings() {
   try {
     fs.writeFileSync(
       getUiSettingsPath(),
-      JSON.stringify({ preferredUiDisplayId, desktopAudioEnabled, captureQuality, cameraOffset }, null, 2),
+      JSON.stringify(
+        {
+          preferredUiDisplayId,
+          desktopAudioEnabled,
+          captureQuality,
+          cameraOffset,
+          cameraSize,
+          backgroundBlurEnabled,
+        },
+        null,
+        2,
+      ),
       "utf8",
     );
   } catch (error) {
@@ -971,10 +999,13 @@ function createCameraWindow() {
     webPreferences: { ...BASE_PREFS, preload: PRELOAD, partition: LOOM_PARTITION },
   });
 
+  cameraWindow.webContents.on("did-finish-load", () => {
+    cameraWindow.webContents.send("background-blur-changed", backgroundBlurEnabled);
+  });
   cameraWindow.setContentProtection(true);
   cameraWindow.setSkipTaskbar(true);
   cameraWindow.setVisibleOnAllWorkspaces(true);
-  cameraWindow.loadFile(path.join(__dirname, "src", "views", "camera.html"));
+  cameraWindow.loadURL(`http://localhost:${PORT}/camera`);
   cameraWindow.on("closed", () => {
     cameraWindow = null;
   });
@@ -1035,14 +1066,14 @@ function getUiWorkArea() {
 function getDefaultCameraOffset(area) {
   return {
     x: OVERLAY_UI_MARGIN,
-    y: area.height - OVERLAY_UI_MARGIN - CONTROLS_WINDOW_HEIGHT - OVERLAY_UI_GAP - CAMERA_WINDOW_SIZE,
+    y: area.height - OVERLAY_UI_MARGIN - CONTROLS_WINDOW_HEIGHT - OVERLAY_UI_GAP - cameraSize,
   };
 }
 
 function clampCameraOffset(offset, area) {
   return {
-    x: Math.min(Math.max(Math.round(offset.x), 0), Math.max(0, area.width - CAMERA_WINDOW_SIZE)),
-    y: Math.min(Math.max(Math.round(offset.y), 0), Math.max(0, area.height - CAMERA_WINDOW_SIZE)),
+    x: Math.min(Math.max(Math.round(offset.x), 0), Math.max(0, area.width - cameraSize)),
+    y: Math.min(Math.max(Math.round(offset.y), 0), Math.max(0, area.height - cameraSize)),
   };
 }
 
@@ -1052,8 +1083,8 @@ function getCameraWindowBounds() {
   return {
     x: area.x + offset.x,
     y: area.y + offset.y,
-    width: CAMERA_WINDOW_SIZE,
-    height: CAMERA_WINDOW_SIZE,
+    width: cameraSize,
+    height: cameraSize,
   };
 }
 
@@ -1360,6 +1391,31 @@ ipcMain.on("raise-overlay-ui", () => {
 // reports screen-space pointer deltas (pointer capture keeps them coming even
 // when the cursor outruns the 200px window) and the main process applies them.
 
+// Resizing keeps the bubble's centre where it is, which is what the eye
+// expects when scrolling over it, then clamps the result back into the work
+// area so it cannot grow off-screen.
+function setCameraSize(nextSize) {
+  const area = getUiWorkArea();
+  const previous = cameraSize;
+  const resolved = normalizeCameraSize(nextSize);
+  if (resolved === previous) return cameraSize;
+
+  const current = cameraOffset || getDefaultCameraOffset(area);
+  const delta = (previous - resolved) / 2;
+  cameraSize = resolved;
+  cameraOffset = clampCameraOffset({ x: current.x + delta, y: current.y + delta }, area);
+
+  if (cameraWindow && !cameraWindow.isDestroyed()) {
+    cameraWindow.setBounds(getCameraWindowBounds());
+  }
+  if (controlsWindow && !controlsWindow.isDestroyed()) {
+    const ctrlWidth = isDrawing() ? CONTROLS_WIDTH_DRAWING : CONTROLS_WIDTH_NORMAL;
+    controlsWindow.setBounds(getControlsWindowBounds(ctrlWidth));
+  }
+  raiseOverlayUiWindows();
+  return cameraSize;
+}
+
 function moveCameraToOffset(offset) {
   const area = getUiWorkArea();
   cameraOffset = clampCameraOffset(offset, area);
@@ -1398,9 +1454,49 @@ ipcMain.on("camera-drag-end", () => {
 ipcMain.on("camera-reset-position", () => {
   cameraDragOrigin = null;
   cameraOffset = null;
+  cameraSize = CAMERA_SIZE_DEFAULT;
   saveUiSettings();
+  if (cameraWindow && !cameraWindow.isDestroyed()) {
+    cameraWindow.setBounds(getCameraWindowBounds());
+  }
   repositionUiWindows();
+  notifyCameraSizeChanged();
 });
+
+// Scroll wheel over the bubble. The renderer sends the direction; the step
+// lives here so the dropdown and the wheel cannot drift apart.
+ipcMain.on("camera-size-step", (_event, direction) => {
+  const step = Number(direction) > 0 ? CAMERA_SIZE_STEP : -CAMERA_SIZE_STEP;
+  setCameraSize(cameraSize + step);
+  saveUiSettings();
+  notifyCameraSizeChanged();
+});
+
+ipcMain.handle("get-camera-size", () => cameraSize);
+
+ipcMain.handle("set-camera-size", (_event, value) => {
+  setCameraSize(value);
+  saveUiSettings();
+  return cameraSize;
+});
+
+ipcMain.handle("get-background-blur", () => backgroundBlurEnabled);
+
+ipcMain.on("set-background-blur", (_event, enabled) => {
+  backgroundBlurEnabled = !!enabled;
+  saveUiSettings();
+  if (cameraWindow && !cameraWindow.isDestroyed()) {
+    cameraWindow.webContents.send("background-blur-changed", backgroundBlurEnabled);
+  }
+});
+
+// Keeps the main window's dropdown in sync when the wheel or a reset changes
+// the size behind its back.
+function notifyCameraSizeChanged() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("camera-size-changed", cameraSize);
+  }
+}
 
 // Forward drawing tool settings from controls window to draw overlay
 for (const channel of ["draw-tool-changed", "draw-color-changed", "draw-size-changed"]) {

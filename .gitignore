@@ -29,3 +29,6 @@ Thumbs.db
 
 .idea/
 .vscode/
+
+# MediaPipe WASM runtime — restored from node_modules by scripts/sync-vendor-assets.sh
+src/public/vendor/tasks-vision/

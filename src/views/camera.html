@@ -9,8 +9,10 @@
       }
       html,
       body {
-        width: 200px;
-        height: 200px;
+        /* The window drives the size — the main process resizes it, so the
+           circle follows without the page knowing any pixel values. */
+        width: 100%;
+        height: 100%;
         overflow: hidden;
         background: transparent;
         /* Dragging is driven manually from the main process — see the script
@@ -22,19 +24,28 @@
       body.dragging {
         cursor: grabbing;
       }
-      video {
-        width: 200px;
-        height: 200px;
+      #cam,
+      #stage {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
         object-fit: cover;
         border-radius: 50%;
         transform: scaleX(-1);
         pointer-events: none;
       }
+      /* Only one of the two is visible: the raw feed when blur is off, the
+         composited canvas when it is on. */
+      #stage { display: none; }
+      body.blurred #cam { visibility: hidden; }
+      body.blurred #stage { display: block; }
     </style>
   </head>
-  <body title="Ziehen zum Verschieben · Doppelklick setzt zurück">
+  <body title="Ziehen zum Verschieben · Scrollen ändert die Größe · Doppelklick setzt zurück">
     <video id="cam" autoplay muted playsinline></video>
-    <script>
+    <canvas id="stage"></canvas>
+    <script type="module">
       const api = window.electronAPI;
 
       // ── Device lifecycle ──────────────────────────────────────────
@@ -63,6 +74,7 @@
             }
             stream = next;
             video.srcObject = next;
+            if (blurEnabled) startBlurLoop();
           })
           .catch((err) => {
             console.error("Camera error:", err);
@@ -74,6 +86,7 @@
 
       function stopCamera() {
         wanted = false;
+        stopBlurLoop();
         if (!stream) return;
         releaseStream(stream);
         stream = null;
@@ -84,12 +97,183 @@
       api?.onCameraSuspend?.(stopCamera);
       api?.onCameraResume?.(startCamera);
 
+      // ── Background blur ───────────────────────────────────────────
+      // MediaPipe segments the person out of each frame; the background is
+      // then drawn blurred and the person composited back on top sharp. The
+      // runtime and model are served locally, so this works offline.
+      const BLUR_PX = 12;
+      // The model runs at 256x256 regardless, so there is nothing to gain from
+      // compositing at more than the bubble's own resolution.
+      const STAGE_SIZE = 480;
+
+      const stage = document.getElementById("stage");
+      const stageCtx = stage.getContext("2d");
+      stage.width = STAGE_SIZE;
+      stage.height = STAGE_SIZE;
+
+      // Person layer, built separately so the mask can cut it out before it
+      // goes over the blurred background.
+      const personCanvas = new OffscreenCanvas(STAGE_SIZE, STAGE_SIZE);
+      const personCtx = personCanvas.getContext("2d");
+      const maskCanvas = new OffscreenCanvas(1, 1);
+      const maskCtx = maskCanvas.getContext("2d");
+
+      let blurEnabled = false;
+      let segmenter = null;
+      let segmenterLoading = null;
+      let frameHandle = 0;
+      let maskImageData = null;
+
+      async function loadSegmenter() {
+        if (segmenter) return segmenter;
+        if (segmenterLoading) return segmenterLoading;
+
+        segmenterLoading = (async () => {
+          const { FilesetResolver, ImageSegmenter } = await import(
+            "/assets/vendor/tasks-vision/vision_bundle.mjs"
+          );
+          const fileset = await FilesetResolver.forVisionTasks("/assets/vendor/tasks-vision");
+          segmenter = await ImageSegmenter.createFromOptions(fileset, {
+            baseOptions: {
+              modelAssetPath: "/assets/vendor/models/selfie_segmenter.tflite",
+              delegate: "GPU",
+            },
+            runningMode: "VIDEO",
+            outputCategoryMask: true,
+            outputConfidenceMasks: false,
+          });
+          return segmenter;
+        })();
+
+        try {
+          return await segmenterLoading;
+        } catch (err) {
+          console.error("[CaptureDesk] Background blur unavailable:", err);
+          segmenterLoading = null;
+          // Fall back to the unprocessed feed rather than showing nothing.
+          document.body.classList.remove("blurred");
+          return null;
+        }
+      }
+
+      // The category mask is one byte per pixel. Polarity was determined
+      // empirically rather than from the docs: a uniform grey image — which
+      // cannot contain a person — comes back as 100% value 255, so 255 is
+      // background and 0 is the person. Getting this backwards blurs the
+      // person and leaves the room sharp.
+      const MASK_PERSON_VALUE = 0;
+
+      // Turned into an alpha channel so the person layer can be cut out with
+      // source-in compositing.
+      function maskToAlpha(mask) {
+        const { width, height } = mask;
+        if (maskCanvas.width !== width || maskCanvas.height !== height) {
+          maskCanvas.width = width;
+          maskCanvas.height = height;
+          maskImageData = maskCtx.createImageData(width, height);
+        }
+
+        const categories = mask.getAsUint8Array();
+        const pixels = maskImageData.data;
+        for (let i = 0, p = 3; i < categories.length; i++, p += 4) {
+          pixels[p] = categories[i] === MASK_PERSON_VALUE ? 255 : 0;
+        }
+        maskCtx.putImageData(maskImageData, 0, 0);
+      }
+
+      // Cover-fit the (usually 4:3) camera frame into the square bubble, the
+      // same way object-fit: cover does for the raw <video>.
+      function coverRect(srcW, srcH, size) {
+        const scale = Math.max(size / srcW, size / srcH);
+        const drawW = srcW * scale;
+        const drawH = srcH * scale;
+        return { x: (size - drawW) / 2, y: (size - drawH) / 2, w: drawW, h: drawH };
+      }
+
+      function renderBlurredFrame(now) {
+        const srcW = video.videoWidth;
+        const srcH = video.videoHeight;
+        if (!segmenter || !srcW || !srcH) return;
+
+        const result = segmenter.segmentForVideo(video, now);
+        const mask = result?.categoryMask;
+        if (!mask) return;
+
+        const fit = coverRect(srcW, srcH, STAGE_SIZE);
+
+        // 1. Blurred background across the whole bubble.
+        stageCtx.save();
+        stageCtx.filter = `blur(${BLUR_PX}px)`;
+        stageCtx.drawImage(video, fit.x, fit.y, fit.w, fit.h);
+        stageCtx.restore();
+
+        // 2. Person layer: the mask cuts the sharp frame to shape.
+        maskToAlpha(mask);
+        personCtx.clearRect(0, 0, STAGE_SIZE, STAGE_SIZE);
+        personCtx.drawImage(maskCanvas, fit.x, fit.y, fit.w, fit.h);
+        personCtx.globalCompositeOperation = "source-in";
+        personCtx.drawImage(video, fit.x, fit.y, fit.w, fit.h);
+        personCtx.globalCompositeOperation = "source-over";
+
+        // 3. Person over background.
+        stageCtx.drawImage(personCanvas, 0, 0);
+
+        mask.close();
+      }
+
+      // requestVideoFrameCallback ties the work to actual camera frames, so a
+      // 30fps feed costs 30 segmentations instead of 60.
+      function scheduleFrame() {
+        if (!blurEnabled) return;
+        if (typeof video.requestVideoFrameCallback === "function") {
+          frameHandle = video.requestVideoFrameCallback((now) => {
+            renderBlurredFrame(now);
+            scheduleFrame();
+          });
+        } else {
+          frameHandle = requestAnimationFrame((now) => {
+            renderBlurredFrame(now);
+            scheduleFrame();
+          });
+        }
+      }
+
+      async function startBlurLoop() {
+        if (!blurEnabled || frameHandle) return;
+        const ready = await loadSegmenter();
+        if (!ready || !blurEnabled) return;
+        scheduleFrame();
+      }
+
+      function stopBlurLoop() {
+        if (!frameHandle) return;
+        if (typeof video.cancelVideoFrameCallback === "function") {
+          video.cancelVideoFrameCallback(frameHandle);
+        } else {
+          cancelAnimationFrame(frameHandle);
+        }
+        frameHandle = 0;
+      }
+
+      function setBlurEnabled(enabled) {
+        blurEnabled = !!enabled;
+        document.body.classList.toggle("blurred", blurEnabled);
+        if (blurEnabled) {
+          startBlurLoop();
+        } else {
+          stopBlurLoop();
+          stageCtx.clearRect(0, 0, STAGE_SIZE, STAGE_SIZE);
+        }
+      }
+
+      api?.onBackgroundBlurChanged?.(setBlurEnabled);
+
       // ── Dragging ──────────────────────────────────────────────────
       // `-webkit-app-region: drag` is unreliable for transparent, toolbar-type
       // windows on X11, so the position is applied in the main process from
       // screen-space pointer deltas. `screenX/screenY` are cursor coordinates
       // and therefore unaffected by the window moving underneath; pointer
-      // capture keeps events flowing when the cursor outruns the 200px window.
+      // capture keeps events flowing when the cursor outruns the window.
       // Moves are coalesced to one IPC message per frame.
       let dragStart = null;
       let pendingDelta = null;
@@ -137,7 +321,19 @@
       document.body.addEventListener("pointercancel", endDrag);
       window.addEventListener("blur", endDrag);
 
-      // Double-click restores the default spot above the controls bar.
+      // Scroll to resize. The step lives in the main process so the wheel and
+      // the settings dropdown cannot drift apart.
+      document.body.addEventListener(
+        "wheel",
+        (event) => {
+          event.preventDefault();
+          if (event.deltaY === 0) return;
+          api?.sendCameraSizeStep?.(event.deltaY < 0 ? 1 : -1);
+        },
+        { passive: false },
+      );
+
+      // Double-click restores the default position and size.
       document.body.addEventListener("dblclick", () => {
         endDrag();
         api?.resetCameraPosition?.();

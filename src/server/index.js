@@ -54,10 +54,26 @@ const PUBLIC_DIR = path.join(__dirname, "../public");
 const app = express();
 app.set("view engine", "ejs");
 app.set("views", path.join(__dirname, "../views"));
-app.use("/assets", express.static(PUBLIC_DIR));
+app.use(
+  "/assets",
+  express.static(PUBLIC_DIR, {
+    // Everything under /assets is content-addressed by release, so let the
+    // renderer cache it instead of re-reading the 12 MB wasm on every start.
+    maxAge: "1h",
+    immutable: false,
+  }),
+);
 
 app.get("/", (_, res) => {
   return res.render("index");
+});
+
+// The camera overlay is served over http rather than loaded from disk: it
+// pulls the MediaPipe WASM runtime for background blur, and fetching wasm from
+// a file:// origin is blocked. localhost counts as a secure context, so
+// getUserMedia keeps working.
+app.get("/camera", (_, res) => {
+  return res.sendFile(path.join(__dirname, "../views/camera.html"));
 });
 
 app.get("/api/loom-token", async (_, res, next) => {

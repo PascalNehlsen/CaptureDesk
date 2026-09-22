@@ -12,6 +12,8 @@ window.global = window;
   const monitorSelect = document.getElementById("monitor-select");
   const desktopAudioToggle = document.getElementById("desktop-audio-toggle");
   const captureQualitySelect = document.getElementById("capture-quality-select");
+  const cameraSizeSelect = document.getElementById("camera-size-select");
+  const backgroundBlurToggle = document.getElementById("background-blur-toggle");
 
   // ── Window controls (frameless title bar) ───────────────────────────────────
   document.getElementById("btn-minimize")?.addEventListener("click", () => {
@@ -296,6 +298,27 @@ window.global = window;
     if (captureQualitySelect) applyCaptureQualitySetting(captureQualitySelect.value);
   });
 
+  cameraSizeSelect?.addEventListener("change", async () => {
+    if (!window.electronAPI?.setCameraSize) return;
+    try {
+      showCameraSize(await window.electronAPI.setCameraSize(cameraSizeSelect.value));
+    } catch (error) {
+      appendLog("Failed to set camera size", error.message || String(error));
+    }
+  });
+
+  // Scrolling on the bubble changes the size behind the dropdown's back.
+  if (typeof window.electronAPI?.onCameraSizeChanged === "function") {
+    window.electronAPI.onCameraSizeChanged((size) => showCameraSize(size));
+  }
+
+  backgroundBlurToggle?.addEventListener("change", () => {
+    window.electronAPI?.setBackgroundBlur?.(backgroundBlurToggle.checked);
+  });
+
+  initializeCameraSizeSelect().catch(() => {});
+  initializeBackgroundBlurToggle().catch(() => {});
+
   window.addEventListener("focus", () => {
     populateMonitorSelector().catch(() => {});
   });
@@ -330,6 +353,45 @@ window.global = window;
     const savedValue = await window.electronAPI.getDesktopAudio();
     desktopAudioToggle.checked = !!savedValue;
     applyDesktopAudioSetting(savedValue);
+  }
+
+  // The wheel over the camera bubble produces sizes between the presets, so
+  // the dropdown grows a custom entry rather than silently showing a value the
+  // camera does not have.
+  const CAMERA_SIZE_PRESETS = ["140", "200", "280"];
+
+  function showCameraSize(size) {
+    if (!cameraSizeSelect) return;
+    const value = String(size);
+    let custom = cameraSizeSelect.querySelector("option[data-custom]");
+
+    if (CAMERA_SIZE_PRESETS.includes(value)) {
+      if (custom) custom.remove();
+    } else {
+      if (!custom) {
+        custom = document.createElement("option");
+        custom.dataset.custom = "true";
+        cameraSizeSelect.appendChild(custom);
+      }
+      custom.value = value;
+      custom.textContent = `Benutzerdefiniert (${value} px)`;
+    }
+
+    cameraSizeSelect.value = value;
+  }
+
+  async function initializeCameraSizeSelect() {
+    if (!cameraSizeSelect || !window.electronAPI?.getCameraSize) return;
+    showCameraSize(await window.electronAPI.getCameraSize());
+  }
+
+  async function initializeBackgroundBlurToggle() {
+    if (!backgroundBlurToggle) return;
+    if (!window.electronAPI?.getBackgroundBlur) {
+      window.electronAPI?.setBackgroundBlur?.(backgroundBlurToggle.checked);
+      return;
+    }
+    backgroundBlurToggle.checked = !!(await window.electronAPI.getBackgroundBlur());
   }
 
   function applyCaptureQualitySetting(value) {

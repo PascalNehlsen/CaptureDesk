@@ -6,15 +6,17 @@
   "license": "MIT",
   "scripts": {
     "start": "nodemon -w src src/server/index.js",
-    "electron": "bash ./scripts/launch-desktop.sh",
-    "electron:no-sandbox": "ELECTRON_NO_SANDBOX=1 bash ./scripts/launch-desktop.sh",
+    "electron": "npm run vendor:sync && bash ./scripts/launch-desktop.sh",
+    "electron:no-sandbox": "npm run vendor:sync && ELECTRON_NO_SANDBOX=1 bash ./scripts/launch-desktop.sh",
     "desktop:install": "bash ./scripts/install-desktop-entry.sh",
-    "pack": "electron-builder --dir",
-    "dist": "electron-builder --linux AppImage"
+    "pack": "npm run vendor:sync && electron-builder --dir",
+    "dist": "npm run vendor:sync && electron-builder --linux AppImage",
+    "vendor:sync": "bash ./scripts/sync-vendor-assets.sh"
   },
   "dependencies": {
     "@loomhq/loom-embed": "^1.7.0",
     "@loomhq/record-sdk": "^4.10.4",
+    "@mediapipe/tasks-vision": "^1.0.1",
     "dotenv": "^17.4.2",
     "ejs": "3.1.10",
     "express": "4.22.1"

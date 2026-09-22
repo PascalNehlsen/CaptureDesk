@@ -47,6 +47,15 @@ contextBridge.exposeInMainWorld("electronAPI", {
   onCameraSuspend: (callback) => ipcRenderer.on("camera-suspend", () => callback()),
   onCameraResume: (callback) => ipcRenderer.on("camera-resume", () => callback()),
 
+  // Camera bubble — size and background blur
+  getCameraSize: () => ipcRenderer.invoke("get-camera-size"),
+  setCameraSize: (value) => ipcRenderer.invoke("set-camera-size", value),
+  sendCameraSizeStep: (direction) => ipcRenderer.send("camera-size-step", direction),
+  onCameraSizeChanged: (callback) => ipcRenderer.on("camera-size-changed", (_, size) => callback(size)),
+  getBackgroundBlur: () => ipcRenderer.invoke("get-background-blur"),
+  setBackgroundBlur: (enabled) => ipcRenderer.send("set-background-blur", enabled),
+  onBackgroundBlurChanged: (callback) => ipcRenderer.on("background-blur-changed", (_, enabled) => callback(enabled)),
+
   // Camera bubble dragging
   sendCameraDragStart: () => ipcRenderer.send("camera-drag-start"),
   sendCameraDragMove: (delta) => ipcRenderer.send("camera-drag-move", delta),
