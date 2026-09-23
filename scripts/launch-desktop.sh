@@ -61,7 +61,7 @@ echo "COMMON_CHROMIUM_ARGS: ${COMMON_CHROMIUM_ARGS[*]}"
 
 UNPACKED_CANDIDATES=(
   "${ROOT_DIR}/release/linux-unpacked/CaptureDesk"
-  "${ROOT_DIR}/release/linux-unpacked/loom-sdk-backend-auth"
+  "${ROOT_DIR}/release/linux-unpacked/capturedesk"
 )
 
 find_unpacked_binary() {
@@ -131,7 +131,18 @@ ensure_dev_sandbox_compat() {
   fi
 }
 
+# Since Electron 42 the npm package no longer downloads its binary in a
+# postinstall script, so fetch it on first launch before exec'ing it directly.
+ensure_dev_electron_binary() {
+  if [[ -x "${ROOT_DIR}/node_modules/electron/dist/electron" ]]; then
+    return 0
+  fi
+  echo "Electron binary missing, downloading it"
+  node "${ROOT_DIR}/node_modules/electron/install.js"
+}
+
 if [[ "${LAUNCH_TARGET}" == "dev" ]]; then
+  ensure_dev_electron_binary
   ensure_dev_sandbox_compat
   echo "Launching dev Electron runtime"
   exec env -u ELECTRON_RUN_AS_NODE ./node_modules/electron/dist/electron . "${COMMON_CHROMIUM_ARGS[@]}"
@@ -157,5 +168,6 @@ if [[ "${LAUNCH_TARGET}" != "dev" && "${LAUNCH_TARGET}" != "auto" && "${LAUNCH_T
   exit 1
 fi
 
+ensure_dev_electron_binary
 echo "Launching dev Electron runtime"
 exec env -u ELECTRON_RUN_AS_NODE ./node_modules/electron/dist/electron . "${COMMON_CHROMIUM_ARGS[@]}"
