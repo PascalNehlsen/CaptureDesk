@@ -1,5 +1,5 @@
 {
-  "name": "loom-sdk-backend-auth",
+  "name": "capturedesk",
   "version": "1.0.0",
   "description": "CaptureDesk desktop recorder built with Electron",
   "main": "electron-main.js",

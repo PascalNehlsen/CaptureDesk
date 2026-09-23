@@ -2,11 +2,14 @@
 
 Electron desktop app for screen recording with the Loom Record SDK, a custom drawing overlay, and a lightweight local Express backend.
 
+> CaptureDesk is an independent project. It is not affiliated with, endorsed by, or supported by Loom, Inc. or Atlassian. "Loom" is a trademark of its respective owner.
+
 ## Table of Contents
 
 - [Quickstart](#quickstart)
 - [Usage](#usage)
 - [Additional Information](#additional-information)
+- [License](#license)
 
 ## Quickstart
 
@@ -14,7 +17,7 @@ Electron desktop app for screen recording with the Loom Record SDK, a custom dra
 
 - Node.js and npm
 - Linux desktop environment
-- A Loom app ID
+- Your own Loom developer app (app ID and private key). Using the Loom SDK means accepting the [Loom SDK Beta Agreement](http://cdn.loom.com/assets/marketing/sdk-beta-agreement.pdf).
 
 ### Setup
 
@@ -56,6 +59,8 @@ Electron desktop app for screen recording with the Loom Record SDK, a custom dra
 - `npm run pack` creates an unpacked build in `release/linux-unpacked/`
 - `npm run dist` builds a Linux AppImage in `release/`
 
+Packaged builds contain the proprietary Loom SDK. The Loom SDK Beta Agreement does not allow redistributing it, so build them for your own use only and do not publish them (for example as GitHub releases).
+
 ### Main features
 
 - Screen recording via the Loom Record SDK
@@ -84,3 +89,9 @@ Electron desktop app for screen recording with the Loom Record SDK, a custom dra
 - `.env` is intentionally ignored by git.
 - `release/` contains generated build artifacts and should not be committed.
 - If an AppImage does not start on Ubuntu, install FUSE support (`libfuse2` or `libfuse2t64` depending on your system).
+
+## License
+
+The CaptureDesk source code is released under the [MIT License](LICENSE).
+
+This license does not cover third-party components. The Loom Record SDK is proprietary and is not included in this repository. See [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) for details.
