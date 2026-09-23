@@ -23,3 +23,12 @@ cp "${SRC}/wasm/vision_wasm_internal.js" "${DEST}/"
 cp "${SRC}/wasm/vision_wasm_internal.wasm" "${DEST}/"
 
 echo "sync-vendor-assets: synced $(du -sh "${DEST}" | cut -f1) to ${DEST}"
+
+# The Loom Record SDK is proprietary (Loom SDK Beta Agreement) and must not be
+# redistributed through this repo, so its browser bundle is built locally from
+# node_modules instead of being committed.
+"${ROOT_DIR}/node_modules/.bin/esbuild" "${ROOT_DIR}/src/public/loom-sdk-entry.js" \
+  --bundle --format=iife --log-level=warning \
+  --outfile="${ROOT_DIR}/src/public/loom-sdk-browser.js"
+
+echo "sync-vendor-assets: built Loom SDK bundle to src/public/loom-sdk-browser.js"
