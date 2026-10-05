@@ -41,7 +41,8 @@
       "preload.js",
       "setup-preload.js",
       "src/**/*",
-      "package.json"
+      "package.json",
+      "assets/icons/512x512.png"
     ],
     "linux": {
       "target": [
@@ -49,7 +50,7 @@
         "deb"
       ],
       "category": "Utility",
-      "icon": "assets/capturedesk.svg",
+      "icon": "assets/icons",
       "executableName": "capturedesk",
       "synopsis": "Screen recorder with drawing overlay",
       "syncDesktopName": true
