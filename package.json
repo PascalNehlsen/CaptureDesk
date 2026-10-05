@@ -51,7 +51,10 @@
       "icon": "assets/capturedesk.svg",
       "executableName": "capturedesk",
       "synopsis": "Screen recorder with drawing overlay",
-      "syncDesktopName": true
+      "syncDesktopName": true,
+      "executableArgs": [
+        "--ozone-platform=x11"
+      ]
     },
     "deb": {
       "depends": [
