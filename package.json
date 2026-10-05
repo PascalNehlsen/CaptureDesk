@@ -11,6 +11,7 @@
     "desktop:install": "bash ./scripts/install-desktop-entry.sh",
     "pack": "npm run vendor:sync && electron-builder --dir",
     "dist": "npm run vendor:sync && electron-builder --linux AppImage",
+    "dist:deb": "npm run vendor:sync && electron-builder --linux deb",
     "vendor:sync": "bash ./scripts/sync-vendor-assets.sh"
   },
   "dependencies": {
@@ -43,9 +44,34 @@
     ],
     "linux": {
       "target": [
-        "AppImage"
+        "AppImage",
+        "deb"
       ],
-      "category": "Utility"
-    }
-  }
+      "category": "Utility",
+      "icon": "assets/capturedesk.svg",
+      "executableName": "capturedesk",
+      "synopsis": "Screen recorder with drawing overlay",
+      "syncDesktopName": true
+    },
+    "deb": {
+      "depends": [
+        "libgtk-3-0",
+        "libnotify4",
+        "libnss3",
+        "libxss1",
+        "libxtst6",
+        "xdg-utils",
+        "libatspi2.0-0",
+        "libuuid1",
+        "libsecret-1-0"
+      ]
+    },
+    "afterPack": "scripts/after-pack.js"
+  },
+  "author": {
+    "name": "Pascal Nehlsen",
+    "email": "mail@pascal-nehlsen.de"
+  },
+  "homepage": "https://github.com/PascalNehlsen/CaptureDesk",
+  "desktopName": "capturedesk.desktop"
 }

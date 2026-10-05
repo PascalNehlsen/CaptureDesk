@@ -58,6 +58,17 @@ Electron desktop app for screen recording with the Loom Record SDK, a custom dra
 
 - `npm run pack` creates an unpacked build in `release/linux-unpacked/`
 - `npm run dist` builds a Linux AppImage in `release/`
+- `npm run dist:deb` builds a Debian/Ubuntu package in `release/`
+
+Install the `.deb` and put your credentials where the installed app looks for them:
+
+```bash
+sudo apt install ./release/capturedesk_1.0.0_amd64.deb
+mkdir -p ~/.config/CaptureDesk
+cp example.env ~/.config/CaptureDesk/.env   # then fill in app_id and private_key
+```
+
+The app is installed to `/opt/CaptureDesk` and shows up in the application menu. Remove it with `sudo apt remove capturedesk`. `~/.config/CaptureDesk/.env` (or `$XDG_CONFIG_HOME/CaptureDesk/.env`) takes precedence over any other `.env`.
 
 Packaged builds contain the proprietary Loom SDK. The Loom SDK Beta Agreement does not allow redistributing it, so build them for your own use only and do not publish them (for example as GitHub releases).
 

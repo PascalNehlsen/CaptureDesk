@@ -1,9 +1,21 @@
 const path = require("path");
 const fs = require("fs");
 const dotenv = require("dotenv");
+const os = require("os");
 const express = require("express");
 
+// Installed builds (e.g. the .deb in /opt) read their config from here.
+function userConfigEnvPath() {
+  const configHome = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config");
+  return path.join(configHome, "CaptureDesk", ".env");
+}
+
 function resolveDotenvPath() {
+  const userEnvPath = userConfigEnvPath();
+  if (fs.existsSync(userEnvPath)) {
+    return userEnvPath;
+  }
+
   const baseDirs = [
     path.resolve(__dirname, "../../"),
     process.cwd(),
