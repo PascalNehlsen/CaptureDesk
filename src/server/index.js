@@ -60,13 +60,22 @@ const PUBLIC_DIR = path.join(__dirname, "../public");
 const app = express();
 app.set("view engine", "ejs");
 app.set("views", path.join(__dirname, "../views"));
+// The vendored MediaPipe runtime only changes with a dependency update, so let
+// the renderer cache it instead of re-reading the 12 MB wasm on every start.
+app.use(
+  "/assets/vendor",
+  express.static(path.join(PUBLIC_DIR, "vendor"), {
+    maxAge: "1h",
+    immutable: false,
+  }),
+);
+// Everything else under /assets is our own code and changes with every update.
+// maxAge 0 makes the renderer revalidate via ETag (a cheap 304), so an updated
+// renderer.js is never shadowed by a stale cached copy.
 app.use(
   "/assets",
   express.static(PUBLIC_DIR, {
-    // Everything under /assets is content-addressed by release, so let the
-    // renderer cache it instead of re-reading the 12 MB wasm on every start.
-    maxAge: "1h",
-    immutable: false,
+    maxAge: 0,
   }),
 );
 
