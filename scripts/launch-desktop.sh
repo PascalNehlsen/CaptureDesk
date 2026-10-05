@@ -14,6 +14,17 @@ echo "[$(date '+%Y-%m-%d %H:%M:%S')] launcher invoked"
 echo "PWD(before): ${PWD}"
 echo "ROOT_DIR: ${ROOT_DIR}"
 
+# Electron never reports the launch as complete, so GNOME keeps the busy cursor
+# until its timeout. It also copies the launch token into _NET_STARTUP_ID as an
+# empty STRING, which GNOME rejects. Drop the token from Electron's environment
+# and send the "launch complete" message ourselves once the window is up. exec
+# keeps this PID, so the helper can find the window by _NET_WM_PID.
+STARTUP_TOKEN="${DESKTOP_STARTUP_ID:-${XDG_ACTIVATION_TOKEN:-}}"
+unset DESKTOP_STARTUP_ID XDG_ACTIVATION_TOKEN
+if [[ -n "${STARTUP_TOKEN}" ]] && command -v python3 >/dev/null 2>&1; then
+  python3 "${SCRIPT_DIR}/notify-startup-complete.py" "$$" "${STARTUP_TOKEN}" &
+fi
+
 cd "${ROOT_DIR}"
 
 resolve_port_from_env_file() {
