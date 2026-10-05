@@ -6,14 +6,18 @@ on:
   pull_request:
     branches: [main]
 
+# The jobs only read the repository.
+permissions:
+  contents: read
+
 jobs:
   validate:
     name: Syntax validation
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
           cache: npm
@@ -29,14 +33,20 @@ jobs:
           node --check src/server/index.js
           node --check src/server/user-config.js
           node --check src/public/setup.js
+          node --check scripts/after-pack.js
+
+      - name: Check shell and Python scripts
+        run: |
+          for script in scripts/*.sh; do bash -n "$script"; done
+          python3 -m py_compile scripts/notify-startup-complete.py
 
   audit:
     name: Dependency audit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
           cache: npm

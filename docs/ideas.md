@@ -2,6 +2,9 @@
 
 A collection of AI feature concepts ranging from practical quick wins to genuinely novel ideas that don't exist in any screen recording tool today.
 
+> [!NOTE]
+> This is a brainstorm, not a roadmap. None of these features exist in CaptureDesk yet, and none are scheduled. For what the app does today, see the [README](../README.md#features).
+
 ---
 
 ## Practical — Build These First
