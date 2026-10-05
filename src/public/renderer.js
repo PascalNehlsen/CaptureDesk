@@ -14,6 +14,7 @@ window.global = window;
   const captureQualitySelect = document.getElementById("capture-quality-select");
   const cameraSizeSelect = document.getElementById("camera-size-select");
   const backgroundBlurToggle = document.getElementById("background-blur-toggle");
+  const loomAppIdButton = document.getElementById("loom-app-id-btn");
 
   // ── Window controls (frameless title bar) ───────────────────────────────────
   document.getElementById("btn-minimize")?.addEventListener("click", () => {
@@ -296,6 +297,10 @@ window.global = window;
 
   initializeCaptureQualitySelect().catch(() => {
     if (captureQualitySelect) applyCaptureQualitySetting(captureQualitySelect.value);
+  });
+
+  loomAppIdButton?.addEventListener("click", () => {
+    window.electronAPI?.openSetup?.();
   });
 
   cameraSizeSelect?.addEventListener("change", async () => {

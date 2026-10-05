@@ -188,6 +188,17 @@
         flex-shrink: 0;
       }
 
+      .settings-btn {
+        background: rgba(15, 23, 42, 0.85);
+        color: var(--text-primary);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 6px 12px;
+        font-size: 12px;
+        cursor: pointer;
+      }
+      .settings-btn:hover { background: var(--bg-surface-hover); }
+
       .monitor-select {
         min-width: 0;
         flex: 1;
@@ -405,6 +416,10 @@
         <div class="monitor-config">
           <label for="background-blur-toggle">Hintergrund verwischen</label>
           <input type="checkbox" id="background-blur-toggle" title="Kamerahintergrund unscharf machen" />
+        </div>
+        <div class="monitor-config">
+          <label for="loom-app-id-btn">Loom App-ID</label>
+          <button type="button" id="loom-app-id-btn" class="settings-btn" title="App-ID der Loom-Developer-App ändern">Ändern…</button>
         </div>
         </div>
 

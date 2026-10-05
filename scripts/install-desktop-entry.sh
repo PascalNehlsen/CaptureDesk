@@ -28,7 +28,7 @@ Path=${ROOT_DIR}
 Terminal=false
 Categories=Utility;
 StartupNotify=true
-StartupWMClass=CaptureDesk
+StartupWMClass=capturedesk
 EOF
 
 chmod +x "${ROOT_DIR}/scripts/launch-desktop.sh"
@@ -48,7 +48,7 @@ Path=${ROOT_DIR}
 Terminal=false
 Categories=Utility;
 StartupNotify=true
-StartupWMClass=CaptureDesk
+StartupWMClass=capturedesk
 NoDisplay=true
 EOF
 chmod +x "${LEGACY_DESKTOP_FILE}"

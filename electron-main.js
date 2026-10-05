@@ -10,12 +10,14 @@ const { app, BrowserWindow, desktopCapturer, dialog, globalShortcut, ipcMain, sc
 const { execFile } = require("child_process");
 const fs = require("fs");
 const path = require("path");
-const { start, PORT } = require("./src/server/index.js");
+const { start, PORT, getAppId, setAppId } = require("./src/server/index.js");
+const { isValidAppId, saveAppId, userConfigEnvPath } = require("./src/server/user-config.js");
 
 const LOOM_PARTITION = "persist:loom";
 let mainWindow = null;
 let cameraWindow = null;
 let controlsWindow = null;
+let setupWindow = null;
 let drawOverlayWindow = null;
 let mainWindowBounds = null;
 const CONTROLS_WIDTH_NORMAL = 380;
@@ -65,6 +67,8 @@ function normalizeCameraOffset(value) {
 }
 
 const PRELOAD = path.join(__dirname, "preload.js");
+const SETUP_PRELOAD = path.join(__dirname, "setup-preload.js");
+const LOOM_DEVELOPER_PORTAL_URL = "https://www.loom.com/developer-portal";
 const BASE_PREFS = { contextIsolation: true, nodeIntegration: false, sandbox: true };
 const UI_SETTINGS_FILE = "ui-settings.json";
 
@@ -923,6 +927,39 @@ function configureLoomSession(browserSession) {
   });
 }
 
+// Asks for the Loom app ID. Opened on first start when none is configured, and
+// from the settings in the main window to change it.
+function openSetupWindow() {
+  if (setupWindow && !setupWindow.isDestroyed()) {
+    setupWindow.focus();
+    return;
+  }
+
+  const hasMainWindow = mainWindow && !mainWindow.isDestroyed();
+  setupWindow = new BrowserWindow({
+    width: 560,
+    height: 440,
+    useContentSize: true,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    autoHideMenuBar: true,
+    title: "CaptureDesk einrichten",
+    icon: path.join(__dirname, "assets/capturedesk.svg"),
+    backgroundColor: "#060a13",
+    parent: hasMainWindow ? mainWindow : undefined,
+    modal: hasMainWindow,
+    webPreferences: { ...BASE_PREFS, preload: SETUP_PRELOAD },
+  });
+
+  setupWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  setupWindow.webContents.on("will-navigate", (event) => event.preventDefault());
+  setupWindow.loadFile(path.join(__dirname, "src/views/setup.html"));
+  setupWindow.on("closed", () => {
+    setupWindow = null;
+  });
+}
+
 function createWindow() {
   const loomSession = session.fromPartition(LOOM_PARTITION);
   configureLoomSession(loomSession);
@@ -1285,6 +1322,51 @@ function toggleDrawOverlay() {
 // ── IPC handlers ──────────────────────────────────────────────────────────────
 
 // Window controls (frameless title bar)
+ipcMain.on("open-setup", () => {
+  openSetupWindow();
+});
+
+ipcMain.handle("setup-get-state", () => ({
+  appId: getAppId(),
+  configPath: userConfigEnvPath(),
+  firstRun: !mainWindow || mainWindow.isDestroyed(),
+}));
+
+ipcMain.handle("setup-save-app-id", (_event, value) => {
+  const appId = typeof value === "string" ? value.trim() : "";
+  if (!isValidAppId(appId)) {
+    return { ok: false, error: "Das ist keine gültige App-ID (Format xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)." };
+  }
+  if (uploadInProgress) {
+    return { ok: false, error: "Ein Upload läuft noch. Bitte warte, bis er fertig ist." };
+  }
+
+  try {
+    saveAppId(appId);
+  } catch (error) {
+    return { ok: false, error: `Speichern fehlgeschlagen: ${error.message}` };
+  }
+  setAppId(appId);
+
+  // The Loom SDK reads the app ID once at startup, so the main window has to
+  // reload to pick up a new one.
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.reload();
+  } else {
+    createWindow();
+  }
+  setupWindow?.close();
+  return { ok: true };
+});
+
+ipcMain.on("setup-open-developer-portal", () => {
+  shell.openExternal(LOOM_DEVELOPER_PORTAL_URL);
+});
+
+ipcMain.on("setup-cancel", () => {
+  setupWindow?.close();
+});
+
 ipcMain.on("window-minimize", () => {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.minimize();
 });
@@ -1595,11 +1677,14 @@ app.whenReady().then(() => {
   screen.on("display-metrics-changed", invalidateDisplayCaches);
 
   start(() => {
-    createWindow();
+    if (getAppId()) createWindow();
+    else openSetupWindow();
   });
 
   app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    if (BrowserWindow.getAllWindows().length > 0) return;
+    if (getAppId()) createWindow();
+    else openSetupWindow();
   });
 });
 
