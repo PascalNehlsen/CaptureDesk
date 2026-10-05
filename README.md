@@ -93,7 +93,7 @@ npm run electron
 | --- | --- |
 | `npm run electron` | Start the app from the checkout |
 | `npm run electron:no-sandbox` | The same, without the Chromium sandbox |
-| `npm run desktop:install` | Add a launcher for the checkout to the application menu |
+| `npm run desktop:install` | Add a "CaptureDesk (Dev)" launcher for the checkout to the application menu |
 | `npm run pack` | Build an unpacked app in `release/linux-unpacked/` |
 | `npm run dist` | Build an AppImage in `release/` |
 | `npm run dist:deb` | Build a `.deb` package in `release/` |
