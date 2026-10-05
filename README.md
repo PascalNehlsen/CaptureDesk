@@ -17,7 +17,7 @@ Electron desktop app for screen recording with the Loom Record SDK, a custom dra
 
 - Node.js and npm
 - Linux desktop environment
-- Your own Loom developer app (app ID and private key). Using the Loom SDK means accepting the [Loom SDK Beta Agreement](http://cdn.loom.com/assets/marketing/sdk-beta-agreement.pdf).
+- Your own Loom developer app. Creating one is free, and CaptureDesk only needs its public app ID. Using the Loom SDK means accepting the [Loom SDK Beta Agreement](http://cdn.loom.com/assets/marketing/sdk-beta-agreement.pdf).
 
 ### Setup
 
@@ -27,25 +27,15 @@ Electron desktop app for screen recording with the Loom Record SDK, a custom dra
    npm install
    ```
 
-2. Create your local env file:
-
-   ```bash
-   cp example.env .env
-   ```
-
-3. Fill in your Loom credentials in `.env`:
-
-   ```env
-   private_key="YOUR_PEM_FROM_YOUR_LOOM_APP"
-   app_id="YOUR_APP_ID"
-   PORT=8090
-   ```
-
-4. Start the app in development mode:
+2. Start the app in development mode:
 
    ```bash
    npm run electron
    ```
+
+3. On first start, a setup window asks for the app ID of your Loom developer app and saves it to `~/.config/CaptureDesk/.env`. You can change it later under "Loom App-ID" in the settings.
+
+   Instead of the setup window you can also copy `example.env` to `.env` and fill in `app_id` there.
 
 ## Usage
 
@@ -60,12 +50,10 @@ Electron desktop app for screen recording with the Loom Record SDK, a custom dra
 - `npm run dist` builds a Linux AppImage in `release/`
 - `npm run dist:deb` builds a Debian/Ubuntu package in `release/`
 
-Install the `.deb` and put your credentials where the installed app looks for them:
+Install the `.deb`:
 
 ```bash
 sudo apt install ./release/capturedesk_1.0.0_amd64.deb
-mkdir -p ~/.config/CaptureDesk
-cp example.env ~/.config/CaptureDesk/.env   # then fill in app_id and private_key
 ```
 
 The app is installed to `/opt/CaptureDesk` and shows up in the application menu. Remove it with `sudo apt remove capturedesk`. `~/.config/CaptureDesk/.env` (or `$XDG_CONFIG_HOME/CaptureDesk/.env`) takes precedence over any other `.env`.
@@ -83,8 +71,7 @@ Packaged builds contain the proprietary Loom SDK. The Loom SDK Beta Agreement do
 
 ### Environment variables
 
-- `app_id`: Loom application ID
-- `private_key`: Loom private key
+- `app_id`: public app ID of your Loom developer app (the setup window writes it for you)
 - `loom_environment`: optional, defaults to `production`
 - `PORT`: optional, defaults to `8080` (valid range: `1-65535`)
 

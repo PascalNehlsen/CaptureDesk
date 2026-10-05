@@ -42,6 +42,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   getCaptureQuality: () => ipcRenderer.invoke("get-capture-quality"),
   setCaptureQuality: (value) => ipcRenderer.send("set-capture-quality", value),
   sendUploadInProgress: (inProgress) => ipcRenderer.send("upload-in-progress", inProgress),
+  openSetup: () => ipcRenderer.send("open-setup"),
 
   // Camera bubble — device lifecycle
   onCameraSuspend: (callback) => ipcRenderer.on("camera-suspend", () => callback()),

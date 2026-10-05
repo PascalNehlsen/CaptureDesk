@@ -1,14 +1,8 @@
 const path = require("path");
 const fs = require("fs");
 const dotenv = require("dotenv");
-const os = require("os");
 const express = require("express");
-
-// Installed builds (e.g. the .deb in /opt) read their config from here.
-function userConfigEnvPath() {
-  const configHome = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config");
-  return path.join(configHome, "CaptureDesk", ".env");
-}
+const { isValidAppId, userConfigEnvPath } = require("./user-config");
 
 function resolveDotenvPath() {
   const userEnvPath = userConfigEnvPath();
@@ -54,7 +48,7 @@ if (dotenvPath) {
 }
 
 // Pull Loom app configuration from env
-const APP_ID = process.env.app_id;
+let appId = isValidAppId(process.env.app_id) ? process.env.app_id.trim() : null;
 const LOOM_ENVIRONMENT = process.env.loom_environment || "production";
 const parsedPort = Number.parseInt(process.env.PORT, 10);
 const PORT =
@@ -90,12 +84,12 @@ app.get("/camera", (_, res) => {
 
 app.get("/api/loom-token", async (_, res, next) => {
   try {
-    if (!APP_ID) {
-      throw new Error("Missing Loom app ID. Set app_id in .env.");
+    if (!appId) {
+      throw new Error("Missing Loom app ID. Set it in the setup window or in .env.");
     }
 
     res.json({
-      appId: APP_ID,
+      appId,
       environment: LOOM_ENVIRONMENT,
     });
   } catch (error) {
@@ -119,4 +113,14 @@ if (require.main === module) {
   start();
 }
 
-module.exports = { start, PORT };
+function getAppId() {
+  return appId;
+}
+
+// Called by the setup window once it has saved a new app ID.
+function setAppId(value) {
+  if (!isValidAppId(value)) throw new Error("Invalid Loom app ID.");
+  appId = value.trim();
+}
+
+module.exports = { start, PORT, getAppId, setAppId };
