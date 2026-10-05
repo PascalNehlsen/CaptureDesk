@@ -16,10 +16,6 @@ mkdir -p "${ICON_THEME_DIR}"
 
 cp "${ROOT_DIR}/assets/capturedesk.svg" "${ICON_THEME_FILE}"
 
-# StartupNotify is off: the app is started through launch-desktop.sh and runs
-# under XWayland, so GNOME never sees the launch complete and keeps the busy
-# cursor until its timeout. The window shows up immediately anyway.
-
 cat > "${DESKTOP_FILE}" <<EOF
 [Desktop Entry]
 Version=1.0
@@ -31,7 +27,7 @@ Icon=capturedesk
 Path=${ROOT_DIR}
 Terminal=false
 Categories=Utility;
-StartupNotify=false
+StartupNotify=true
 StartupWMClass=capturedesk
 EOF
 
@@ -51,7 +47,7 @@ Icon=capturedesk
 Path=${ROOT_DIR}
 Terminal=false
 Categories=Utility;
-StartupNotify=false
+StartupNotify=true
 StartupWMClass=capturedesk
 NoDisplay=true
 EOF
