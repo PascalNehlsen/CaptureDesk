@@ -40,6 +40,14 @@
       #stage { display: none; }
       body.blurred #cam { visibility: hidden; }
       body.blurred #stage { display: block; }
+      /* Blur is on but no composited frame is ready yet (model still loading,
+         camera just resumed, or the segmenter stalled): show the raw feed
+         blurred as a whole rather than the room in focus. clip-path keeps the
+         circle's edge crisp, which border-radius alone does not under a filter. */
+      body.blur-wanted:not(.blurred) #cam {
+        filter: blur(14px);
+        clip-path: circle(50%);
+      }
     </style>
   </head>
   <body title="Ziehen zum Verschieben · Scrollen ändert die Größe · Doppelklick setzt zurück">
@@ -47,6 +55,11 @@
     <canvas id="stage"></canvas>
     <script type="module">
       const api = window.electronAPI;
+
+      // The main process passes the blur setting in the URL so it applies to
+      // the very first camera frame; the IPC update only arrives after load.
+      const initialBlur = new URLSearchParams(location.search).get("blur") === "1";
+      document.body.classList.toggle("blur-wanted", initialBlur);
 
       // ── Device lifecycle ──────────────────────────────────────────
       // The window is only hidden between recordings, so the stream has to be
@@ -357,7 +370,7 @@
             loopToken++;
             scheduleFrame(loopToken);
           } else {
-            console.warn("[CaptureDesk] Blur kept stalling; staying on the raw camera");
+            console.warn("[CaptureDesk] Blur kept stalling; staying on the fully blurred camera");
             blurEnabled = false;
           }
         }, 500);
@@ -404,12 +417,16 @@
 
       function setBlurEnabled(enabled) {
         const next = !!enabled;
+        document.body.classList.toggle("blur-wanted", next);
         if (next === blurEnabled) return;
         blurEnabled = next;
 
         if (blurEnabled) {
           restartsLeft = 3;
           loggedFrameError = false;
+          // Load the model right away instead of waiting for the stream, so the
+          // composited view is ready sooner after the camera comes on.
+          loadSegmenter();
           startBlurLoop();
         } else {
           stopBlurLoop();
@@ -418,6 +435,7 @@
         }
       }
 
+      setBlurEnabled(initialBlur);
       api?.onBackgroundBlurChanged?.(setBlurEnabled);
 
       // ── Dragging ──────────────────────────────────────────────────

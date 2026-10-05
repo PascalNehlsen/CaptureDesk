@@ -44,6 +44,10 @@ let _connectorCache = null;
 let desktopAudioEnabled = false;
 let captureQuality = "balanced";
 let uploadInProgress = false;
+// True from the start of the Loom countdown (or the recording, if there is no
+// countdown) until the main window comes back.
+let recordingUiActive = false;
+let countdownSecondsLeft = null;
 let forceCloseMainWindow = false;
 
 const CAPTURE_QUALITY_VALUES = ["fast", "balanced", "quality"];
@@ -967,6 +971,11 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 900,
     height: 700,
+    // Below this the layout overflows: the logo slides under the title bar and
+    // a scrollbar appears. Without a minimum the frameless window could be
+    // dragged down to nothing.
+    minWidth: 600,
+    minHeight: 620,
     frame: false,
     autoHideMenuBar: true,
     icon: path.join(__dirname, "assets/capturedesk.svg"),
@@ -1044,7 +1053,7 @@ function createCameraWindow() {
   cameraWindow.setContentProtection(true);
   cameraWindow.setSkipTaskbar(true);
   cameraWindow.setVisibleOnAllWorkspaces(true);
-  cameraWindow.loadURL(`http://localhost:${PORT}/camera`);
+  cameraWindow.loadURL(`http://localhost:${PORT}/camera?blur=${backgroundBlurEnabled ? 1 : 0}`);
   cameraWindow.on("closed", () => {
     cameraWindow = null;
   });
@@ -1076,6 +1085,11 @@ function createControlsWindow() {
   controlsWindow.setSkipTaskbar(true);
   controlsWindow.setVisibleOnAllWorkspaces(true);
   controlsWindow.setAlwaysOnTop(true, "screen-saver");
+  controlsWindow.webContents.on("did-finish-load", () => {
+    if (countdownSecondsLeft !== null) {
+      controlsWindow.webContents.send("recording-countdown", countdownSecondsLeft);
+    }
+  });
   controlsWindow.loadFile(path.join(__dirname, "src", "views", "controls.html"));
   controlsWindow.on("closed", () => {
     controlsWindow = null;
@@ -1238,7 +1252,6 @@ function showControlsWindow() {
   const ctrlWidth = isDrawing() ? CONTROLS_WIDTH_DRAWING : CONTROLS_WIDTH_NORMAL;
   controlsWindow.setBounds(getControlsWindowBounds(ctrlWidth));
   controlsWindow.setAlwaysOnTop(true, "screen-saver");
-  controlsWindow.webContents.send("reset-recording-timer");
   controlsWindow.show();
   if (typeof controlsWindow.moveTop === "function") controlsWindow.moveTop();
 }
@@ -1256,6 +1269,8 @@ function hideControlsWindow() {
 }
 
 function restoreMainWindow() {
+  recordingUiActive = false;
+  countdownSecondsLeft = null;
   if (!mainWindow || mainWindow.isDestroyed()) return;
   mainWindow.show();
   mainWindow.focus();
@@ -1402,13 +1417,36 @@ ipcMain.on("upload-in-progress", (_, inProgress) => {
   uploadInProgress = !!inProgress;
 });
 
-ipcMain.on("recording-started", () => {
-  if (!mainWindow || mainWindow.isDestroyed()) return;
+// Swaps the main window for the camera bubble and the controls. This runs when
+// the Loom countdown starts rather than when recording starts: by the time
+// onRecordingStarted fires, the recorder is already capturing, so the main
+// window's hide animation and the camera's first frames would end up in the
+// video. The countdown gives both a few seconds to settle.
+function enterRecordingUi() {
+  if (recordingUiActive || !mainWindow || mainWindow.isDestroyed()) return;
+  recordingUiActive = true;
   mainWindowBounds = mainWindow.getBounds();
   mainWindow.hide();
   showCameraWindow();
   showControlsWindow();
   registerRecordingShortcuts();
+}
+
+ipcMain.on("recording-countdown", (_, secondsLeft) => {
+  const value = Math.max(0, Math.round(Number(secondsLeft) || 0));
+  enterRecordingUi();
+  countdownSecondsLeft = value;
+  if (controlsWindow && !controlsWindow.isDestroyed()) {
+    controlsWindow.webContents.send("recording-countdown", value);
+  }
+});
+
+ipcMain.on("recording-started", () => {
+  enterRecordingUi();
+  countdownSecondsLeft = null;
+  if (controlsWindow && !controlsWindow.isDestroyed()) {
+    controlsWindow.webContents.send("reset-recording-timer");
+  }
 });
 
 ipcMain.on("recording-stopped", () => {
