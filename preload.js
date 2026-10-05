@@ -7,6 +7,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
   closeWindow: () => ipcRenderer.send("window-close"),
 
   // Recording lifecycle
+  sendRecordingCountdown: (secondsLeft) => ipcRenderer.send("recording-countdown", secondsLeft),
+  onRecordingCountdown: (callback) => ipcRenderer.on("recording-countdown", (_, secondsLeft) => callback(secondsLeft)),
   sendRecordingStarted: () => ipcRenderer.send("recording-started"),
   sendRecordingStopped: () => ipcRenderer.send("recording-stopped"),
   requestStopRecording: () => ipcRenderer.send("request-stop-recording"),

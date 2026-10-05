@@ -213,8 +213,29 @@ window.global = window;
       },
     });
 
+    // The Loom countdown runs inside this window, which the main process hides
+    // as soon as the countdown starts so it is gone before the first recorded
+    // frame. Stopping during the countdown therefore has to cancel instead.
+    const COUNTDOWN_STAGES = ["countdown", "countdown-skipped"];
+    const isCountingDown = () => {
+      try {
+        return COUNTDOWN_STAGES.includes(sdkButton.store?.getState()?.recorder?.appStage);
+      } catch {
+        return false;
+      }
+    };
+
     if (window.electronAPI && typeof window.electronAPI.onStopRecording === "function") {
       window.electronAPI.onStopRecording(() => {
+        if (isCountingDown()) {
+          setStatus("Recording cancelled.", "ready");
+          try {
+            sdkButton.store.dispatch({ type: "consumer_trigger/cancel_recording" });
+          } catch (err) {
+            appendLog("cancelRecording dispatch threw", err.message);
+          }
+          return;
+        }
         setStatus("Stopping…", "loading");
         if (typeof sdkButton.endRecording === "function") {
           try {
@@ -238,12 +259,25 @@ window.global = window;
       });
     }
 
-    // Forward pause state changes from the SDK store to the controls window
+    // Forward pause state and countdown changes from the SDK store to the main
+    // process. onRecordingStarted only fires once the recorder is already
+    // running, which is too late to get our windows out of the shot.
     if (sdkButton.store && typeof sdkButton.store.subscribe === "function") {
       let lastPauseState = false;
+      let lastCountdown = null;
       sdkButton.store.subscribe(() => {
         try {
           const state = sdkButton.store.getState();
+          const stage = state?.recorder?.appStage;
+          if (COUNTDOWN_STAGES.includes(stage)) {
+            const secondsLeft = stage === "countdown" ? state?.countdown?.secondsLeft ?? 0 : 0;
+            if (secondsLeft !== lastCountdown) {
+              lastCountdown = secondsLeft;
+              window.electronAPI?.sendRecordingCountdown?.(secondsLeft);
+            }
+          } else {
+            lastCountdown = null;
+          }
           const isPaused = !!(state && state.recorder && state.recorder.appStage === "paused");
           if (isPaused !== lastPauseState) {
             lastPauseState = isPaused;

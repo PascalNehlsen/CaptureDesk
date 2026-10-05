@@ -48,6 +48,11 @@
         font-size: 14px;
         min-width: 46px;
       }
+      .timer.countdown {
+        color: #fbbf24;
+        font-weight: 600;
+        text-align: center;
+      }
 
       /* ── Shared button styles ───────────────────────────────────── */
       .divider {
@@ -249,9 +254,21 @@
       // The controls window is reused between recordings, so a new session has
       // to clear the previous session's time.
       function resetTimer() {
+        timerEl.classList.remove("countdown");
+        timerEl.title = "";
         stopTimer();
         accumulatedMs = 0;
         startTimer();
+      }
+
+      // The controls show up when the Loom countdown starts, before anything
+      // is recorded, so they count down until resetTimer() starts the clock.
+      function showCountdown(secondsLeft) {
+        stopTimer();
+        accumulatedMs = 0;
+        timerEl.classList.add("countdown");
+        timerEl.title = "Aufnahme startet gleich";
+        timerEl.textContent = secondsLeft > 0 ? String(secondsLeft) : "…";
       }
 
       function setPauseState(paused) {
@@ -333,6 +350,9 @@
         }
         if (typeof window.electronAPI.onResetRecordingTimer === "function") {
           window.electronAPI.onResetRecordingTimer(resetTimer);
+        }
+        if (typeof window.electronAPI.onRecordingCountdown === "function") {
+          window.electronAPI.onRecordingCountdown(showCountdown);
         }
         if (typeof window.electronAPI.onRecordingPauseStateChanged === "function") {
           window.electronAPI.onRecordingPauseStateChanged((paused) => {
