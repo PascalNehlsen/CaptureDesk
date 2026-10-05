@@ -4,12 +4,23 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 DESKTOP_DIR="${HOME}/.local/share/applications"
-DESKTOP_FILE="${DESKTOP_DIR}/capturedesk.desktop"
-LEGACY_DESKTOP_FILE="${DESKTOP_DIR}/CaptureDesk.desktop"
+# The installed .deb owns capturedesk.desktop. A user entry with the same id
+# would shadow it, so the launcher for this checkout gets its own id.
+DESKTOP_FILE="${DESKTOP_DIR}/capturedesk-dev.desktop"
 USER_DESKTOP_DIR="${HOME}/Desktop"
-USER_DESKTOP_FILE="${USER_DESKTOP_DIR}/CaptureDesk.desktop"
+USER_DESKTOP_FILE="${USER_DESKTOP_DIR}/capturedesk-dev.desktop"
 ICON_THEME_DIR="${HOME}/.local/share/icons/hicolor/scalable/apps"
 ICON_THEME_FILE="${ICON_THEME_DIR}/capturedesk.svg"
+
+# Remove launchers from earlier versions of this script, which used the ids
+# capturedesk.desktop and CaptureDesk.desktop. Only entries that start this
+# script are touched.
+for legacy in "${DESKTOP_DIR}/capturedesk.desktop" "${DESKTOP_DIR}/CaptureDesk.desktop" "${USER_DESKTOP_DIR}/CaptureDesk.desktop"; do
+  if [[ -f "${legacy}" ]] && grep -q "scripts/launch-desktop.sh" "${legacy}"; then
+    rm -f "${legacy}"
+    echo "Removed old launcher: ${legacy}"
+  fi
+done
 
 mkdir -p "${DESKTOP_DIR}"
 mkdir -p "${ICON_THEME_DIR}"
@@ -20,8 +31,8 @@ cat > "${DESKTOP_FILE}" <<EOF
 [Desktop Entry]
 Version=1.0
 Type=Application
-Name=CaptureDesk
-Comment=Launch the CaptureDesk Electron app
+Name=CaptureDesk (Dev)
+Comment=Launch CaptureDesk from ${ROOT_DIR}
 Exec=${ROOT_DIR}/scripts/launch-desktop.sh
 Icon=capturedesk
 Path=${ROOT_DIR}
@@ -33,25 +44,6 @@ EOF
 
 chmod +x "${ROOT_DIR}/scripts/launch-desktop.sh"
 chmod +x "${DESKTOP_FILE}"
-
-# Keep a hidden legacy launcher id so existing Dash favorites continue to work
-# without creating a second visible search result.
-cat > "${LEGACY_DESKTOP_FILE}" <<EOF
-[Desktop Entry]
-Version=1.0
-Type=Application
-Name=CaptureDesk
-Comment=Launch the CaptureDesk Electron app
-Exec=${ROOT_DIR}/scripts/launch-desktop.sh
-Icon=capturedesk
-Path=${ROOT_DIR}
-Terminal=false
-Categories=Utility;
-StartupNotify=true
-StartupWMClass=capturedesk
-NoDisplay=true
-EOF
-chmod +x "${LEGACY_DESKTOP_FILE}"
 
 if command -v update-desktop-database >/dev/null 2>&1; then
   update-desktop-database "${DESKTOP_DIR}" || true

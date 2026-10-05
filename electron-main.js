@@ -72,6 +72,9 @@ function normalizeCameraOffset(value) {
 
 const PRELOAD = path.join(__dirname, "preload.js");
 const SETUP_PRELOAD = path.join(__dirname, "setup-preload.js");
+// Electron cannot load SVG window icons on Linux, so the windows get the PNG
+// rendering of assets/capturedesk.svg.
+const APP_ICON = path.join(__dirname, "assets/icons/512x512.png");
 const LOOM_DEVELOPER_PORTAL_URL = "https://www.loom.com/developer-portal";
 const BASE_PREFS = { contextIsolation: true, nodeIntegration: false, sandbox: true };
 const UI_SETTINGS_FILE = "ui-settings.json";
@@ -949,7 +952,7 @@ function openSetupWindow() {
     maximizable: false,
     autoHideMenuBar: true,
     title: "CaptureDesk einrichten",
-    icon: path.join(__dirname, "assets/capturedesk.svg"),
+    icon: APP_ICON,
     backgroundColor: "#060a13",
     parent: hasMainWindow ? mainWindow : undefined,
     modal: hasMainWindow,
@@ -978,7 +981,7 @@ function createWindow() {
     minHeight: 620,
     frame: false,
     autoHideMenuBar: true,
-    icon: path.join(__dirname, "assets/capturedesk.svg"),
+    icon: APP_ICON,
     webPreferences: {
       ...BASE_PREFS,
       preload: PRELOAD,
