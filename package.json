@@ -17,7 +17,7 @@
     "@loomhq/loom-embed": "^1.7.0",
     "@loomhq/record-sdk": "^4.10.4",
     "@mediapipe/tasks-vision": "^1.0.1",
-    "dotenv": "^18.0.3",
+    "dotenv": "^18.0.5",
     "ejs": "6.0.1",
     "express": "5.2.1"
   },
