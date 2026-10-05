@@ -141,6 +141,20 @@ function isLoomUrl(rawUrl) {
   }
 }
 
+// Our own pages (served from the local server) and Loom.
+function isTrustedMediaOrigin(rawUrl) {
+  if (!rawUrl) return false;
+  try {
+    const { protocol, hostname, port } = new URL(rawUrl);
+    if (protocol === "http:" && (hostname === "localhost" || hostname === "127.0.0.1")) {
+      return Number(port) === PORT;
+    }
+    return protocol === "https:" && isLoomUrl(rawUrl);
+  } catch {
+    return false;
+  }
+}
+
 function relaxFrameAncestorsDirective(values) {
   const cspValues = Array.isArray(values) ? values : [String(values)];
   return cspValues.map((value) =>
@@ -170,9 +184,16 @@ function createPopupWindowOptions() {
 function createWindowOpenHandler() {
   return ({ url }) => {
     if (!/^https?:/i.test(url)) {
-      shell.openExternal(url).catch((error) => {
-        console.error("Failed to open external URL:", error);
-      });
+      // Pages in the Loom session (including popups) can request this, so only
+      // mailto: is handed to the system. file:, smb: and custom schemes would
+      // let a web page make xdg-open launch local files or other handlers.
+      if (/^mailto:/i.test(url)) {
+        shell.openExternal(url).catch((error) => {
+          console.error("Failed to open external URL:", error);
+        });
+      } else {
+        console.warn("Blocked window.open for non-web URL:", url);
+      }
       return { action: "deny" };
     }
 
@@ -860,19 +881,29 @@ function configureLoomSession(browserSession) {
   const ua = browserSession.getUserAgent().replace(/\s*Electron\/[\d.]+/, "");
   browserSession.setUserAgent(ua);
 
-  browserSession.setPermissionRequestHandler((_webContents, permission, callback) => {
-    const allowed = ["media", "screen", "display-capture", "mediaKeySystem"];
-    callback(allowed.includes(permission));
+  // Camera, microphone and screen only go to our own pages and to Loom. Other
+  // sites can end up in this session through popups (sign-in pages and the
+  // like) and must not get them, least of all the screen, which is handed out
+  // without a prompt below.
+  const allowedPermissions = ["media", "screen", "display-capture", "mediaKeySystem"];
+
+  browserSession.setPermissionRequestHandler((_webContents, permission, callback, details) => {
+    callback(allowedPermissions.includes(permission) && isTrustedMediaOrigin(details?.requestingUrl));
   });
 
-  browserSession.setPermissionCheckHandler((_webContents, permission) => {
-    const allowed = ["media", "screen", "display-capture", "mediaKeySystem"];
-    return allowed.includes(permission);
+  browserSession.setPermissionCheckHandler((_webContents, permission, requestingOrigin) => {
+    return allowedPermissions.includes(permission) && isTrustedMediaOrigin(requestingOrigin);
   });
 
   if (typeof browserSession.setDisplayMediaRequestHandler === "function") {
     browserSession.setDisplayMediaRequestHandler(
       async (request, callback) => {
+        const origin = request.securityOrigin || request.frame?.origin || request.frame?.url;
+        if (!isTrustedMediaOrigin(origin)) {
+          console.warn("Blocked screen capture request from", origin || "an unknown origin");
+          callback({});
+          return;
+        }
         try {
           const sources = await desktopCapturer.getSources({
             thumbnailSize: { width: 0, height: 0 },
@@ -1005,10 +1036,10 @@ function createWindow() {
     event.preventDefault();
     const choice = dialog.showMessageBoxSync(mainWindow, {
       type: "warning",
-      title: "Upload laeuft noch",
-      message: "Ein Upload wird gerade uebertragen.",
-      detail: "Wenn du jetzt schliesst, wird der Upload abgebrochen und das Video geht verloren.",
-      buttons: ["Abbrechen", "Trotzdem schliessen"],
+      title: "Upload läuft noch",
+      message: "Ein Upload wird gerade übertragen.",
+      detail: "Wenn du jetzt schließt, wird der Upload abgebrochen und das Video geht verloren.",
+      buttons: ["Abbrechen", "Trotzdem schließen"],
       defaultId: 0,
       cancelId: 0,
       noLink: true,
@@ -1735,8 +1766,8 @@ app.on("before-quit", (event) => {
   event.preventDefault();
   const choice = dialog.showMessageBoxSync(mainWindow, {
     type: "warning",
-    title: "Upload laeuft noch",
-    message: "Ein Upload wird gerade uebertragen.",
+    title: "Upload läuft noch",
+    message: "Ein Upload wird gerade übertragen.",
     detail: "Wenn du jetzt beendest, wird der Upload abgebrochen und das Video geht verloren.",
     buttons: ["Abbrechen", "Trotzdem beenden"],
     defaultId: 0,

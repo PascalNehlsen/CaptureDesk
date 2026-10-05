@@ -17,7 +17,6 @@ updates:
       build-tools:
         patterns:
           - "esbuild"
-          - "nodemon"
 
   - package-ecosystem: github-actions
     directory: /

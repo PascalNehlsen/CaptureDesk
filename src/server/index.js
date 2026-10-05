@@ -112,7 +112,8 @@ app.use((error, _req, res, _next) => {
 });
 
 function start(callback) {
-  app.listen(PORT, () => {
+  // Loopback only: the pages and the app ID are for this machine, not the LAN.
+  app.listen(PORT, "127.0.0.1", () => {
     console.log(`Example app listening at http://localhost:${PORT}`);
     if (callback) callback();
   });
