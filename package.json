@@ -51,10 +51,7 @@
       "icon": "assets/capturedesk.svg",
       "executableName": "capturedesk",
       "synopsis": "Screen recorder with drawing overlay",
-      "syncDesktopName": true,
-      "executableArgs": [
-        "--ozone-platform=x11"
-      ]
+      "syncDesktopName": true
     },
     "deb": {
       "depends": [
@@ -68,7 +65,8 @@
         "libuuid1",
         "libsecret-1-0"
       ]
-    }
+    },
+    "afterPack": "scripts/after-pack.js"
   },
   "author": {
     "name": "Pascal Nehlsen",
