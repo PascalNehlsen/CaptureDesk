@@ -25,7 +25,11 @@ jobs:
       - name: Run TruffleHog
         uses: trufflesecurity/trufflehog@4dd8831c5f12599465d4d45c3c447b4018a34c85 # v3.97.9
         with:
-          extra_args: --only-verified
+          # Not --only-verified: that drops every secret TruffleHog cannot
+          # confirm live, such as a revoked key, a key for a service with no
+          # verifier, or one checked while the provider was down. In a public
+          # repo a revoked key in history still says how keys get committed.
+          extra_args: --results=verified,unknown,unverified
 
   audit-report:
     name: Full audit report
@@ -42,6 +46,6 @@ jobs:
         run: npm ci
 
       # Informational: lists every finding without blocking the build. The CI
-      # workflow fails on critical ones.
+      # workflow fails on high and critical ones.
       - name: npm audit (full report)
         run: npm audit || true
