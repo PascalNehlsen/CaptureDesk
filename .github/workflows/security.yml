@@ -45,7 +45,15 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # Informational: lists every finding without blocking the build. The CI
-      # workflow fails on high and critical ones.
+      # On pushes and pull requests the CI workflow already fails on high and
+      # critical findings. The weekly run needs the same gate: an advisory
+      # published between commits otherwise stays green until the next push,
+      # which in a repo this quiet can be weeks.
+      - name: npm audit (high and above)
+        if: github.event_name == 'schedule'
+        run: npm audit --audit-level=high
+
+      # Informational: lists every finding, including moderate ones.
       - name: npm audit (full report)
+        if: always()
         run: npm audit || true
