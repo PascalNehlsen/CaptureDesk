@@ -60,6 +60,19 @@ const PUBLIC_DIR = path.join(__dirname, "../public");
 const app = express();
 app.set("view engine", "ejs");
 app.set("views", path.join(__dirname, "../views"));
+
+// Binding to 127.0.0.1 keeps the LAN out, but not a web page in the user's
+// browser: DNS rebinding points an attacker's hostname at 127.0.0.1, and the
+// browser then treats this server as same-origin with that page. The request
+// still carries the attacker's hostname in Host, so only our own names pass.
+const ALLOWED_HOSTS = new Set([`localhost:${PORT}`, `127.0.0.1:${PORT}`]);
+app.use((req, res, next) => {
+  if (!ALLOWED_HOSTS.has(req.headers.host)) {
+    return res.status(421).end();
+  }
+  return next();
+});
+
 // The vendored MediaPipe runtime only changes with a dependency update, so let
 // the renderer cache it instead of re-reading the 12 MB wasm on every start.
 app.use(

@@ -17,6 +17,16 @@ updates:
       build-tools:
         patterns:
           - "esbuild"
+    ignore:
+      # From 4.12 on, @loomhq/record-sdk asks for @atlaskit/icon ^36 (4.14:
+      # ^37) as a peer while also asking for @atlaskit/icon-lab ^7, whose
+      # current releases need @atlaskit/icon ^38. npm cannot satisfy both,
+      # so every weekly run failed on this update. Majors stay open in case a
+      # new line fixes the tree. Upgrade minors by hand and test a recording.
+      - dependency-name: "@loomhq/record-sdk"
+        update-types:
+          - version-update:semver-minor
+          - version-update:semver-patch
 
   - package-ecosystem: github-actions
     directory: /
