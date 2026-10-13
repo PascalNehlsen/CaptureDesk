@@ -19,7 +19,7 @@
     "@loomhq/record-sdk": "^4.10.4",
     "@mediapipe/tasks-vision": "^1.0.1",
     "dotenv": "^18.0.5",
-    "ejs": "6.0.1",
+    "ejs": "7.0.1",
     "express": "5.2.1"
   },
   "devDependencies": {
