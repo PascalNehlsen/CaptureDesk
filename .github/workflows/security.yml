@@ -23,7 +23,7 @@ jobs:
           fetch-depth: 0  # full history so trufflehog can scan all commits
 
       - name: Run TruffleHog
-        uses: trufflesecurity/trufflehog@4dd8831c5f12599465d4d45c3c447b4018a34c85 # v3.97.9
+        uses: trufflesecurity/trufflehog@d232362a64a09a9e7d58267b8f5acef00ae90e23 # v3.100.0
         with:
           # Not --only-verified: that drops every secret TruffleHog cannot
           # confirm live, such as a revoked key, a key for a service with no
@@ -37,7 +37,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
           cache: npm
