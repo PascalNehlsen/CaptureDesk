@@ -18,12 +18,12 @@
     "@loomhq/loom-embed": "^1.7.0",
     "@loomhq/record-sdk": "^4.10.4",
     "@mediapipe/tasks-vision": "^1.1.0",
-    "dotenv": "^18.0.5",
+    "dotenv": "^18.0.10",
     "ejs": "7.0.1",
-    "express": "5.2.1"
+    "express": "5.3.0"
   },
   "devDependencies": {
-    "electron": "^44.5.1",
+    "electron": "^44.11.5",
     "electron-builder": "^26.15.3",
     "esbuild": "^0.28.2"
   },
